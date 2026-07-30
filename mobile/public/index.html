@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta httpEquiv="X-UA-Compatible" content="IE=edge" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, shrink-to-fit=no, viewport-fit=cover"
+    />
+    <title>Verify</title>
+
+    <!-- Standard PWA manifest (used by Android/Chrome's install prompt) -->
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="theme-color" content="#3F5AE0" />
+
+    <!-- iOS Safari ignores the manifest for icons/name — these tags are
+         what actually control the Add to Home Screen icon, label, and
+         full-screen (no browser chrome) behavior on iPhone. -->
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Verify" />
+
+    <!-- Browser tab favicon -->
+    <link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png" />
+    <link rel="icon" href="/favicon-16.png" sizes="16x16" type="image/png" />
+
+    <!-- Body scrolling is disabled by default to make ScrollView behave
+         like it does on native; harmless to leave as-is for this app
+         since the screen doesn't scroll anyway. -->
+    <style>
+      html, body, #root { height: 100%; }
+      body { margin: 0; overscroll-behavior: none; background-color: #EEF0F6; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
