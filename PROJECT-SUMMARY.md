@@ -3,8 +3,17 @@
 מסמך זה מיועד להידבק/להיטען בתחילת שיחה חדשה עם Claude Code כדי לחדש
 עבודה על הפרויקט בלי לאבד הקשר. הוא מרכז את **כל** מה שנעשה עד כה,
 המצב המדויק של מה פרוס בפועל מול מה שקיים רק מקומית, וצ'קליסט קונקרטי
-להמשך. **הערה**: אין Git בפרויקט הזה (`git status` מחזיר "not a git
-repository") — אין הסטוריית קומיטים לבדוק, כל ההקשר חי במסמך הזה.
+להמשך.
+
+**Git**: הפרויקט עבר `git init` ויש לו עכשיו ריפו מרוחק ב-GitHub:
+**https://github.com/Ronpar19/Verify** (ענף `main`). זהות ה-commit
+מוגדרת גלובלית במחשב: `user.name=ronpar19`, `user.email=ronpar19@gmail.com`.
+**חשוב**: `.claude/settings.local.json`, `mobile/public/*.apk`,
+`frontend/`, ו-`verify.demo/` נמצאים ב-`.gitignore` בכוונה (הראשון כי
+הוא עלול להכיל טוקנים בשורות ה-allow-list; השאר כי הם עותקים
+ישנים/קובץ בינארי כבד) — **אל תסיר אותם מה-gitignore בלי לבדוק שוב
+לפי אותה השיטה שמתוארת שם** (חיפוש `api[_-]?key|secret|token|password`
+בכל הפרויקט + `git check-ignore -v` על כל קובץ חשוד, לפני כל commit).
 
 ---
 
@@ -56,31 +65,62 @@ Desktop\link-checker-vercel\              <- הבקאנד + שורש
 
 ## 🚨 המצב המדויק כרגע — מה פרוס בפועל מול מה שקיים רק מקומית
 
-**כל העיצוב מחדש שתואר למטה קיים רק בקוד המקומי (`mobile\`). שום דבר
-מזה עוד לא נפרס/נבנה מחדש.** מי שכבר מותקן אצלו (PWA באייפון או ה-APK
-באנדרואיד) עדיין רואה את הגרסה **הישנה** (הרקע הצבעוני המלא, בלי
-הלוגו האמיתי, בלי כפתור החיפוש, בלי תפריט הצד).
-
 - **בקאנד** (`https://verifyapp-khaki.vercel.app`) — פרוס ותקין, **לא
   נגעתי בו בשיחה הזו**. ה-CORS כבר תוקן (מהשיחה הקודמת).
-- **PWA** (`https://verifyweb-phi.vercel.app`) — פרוס אבל **מציג את
-  הגרסה הישנה**. כדי לעדכן:
-  ```powershell
-  cd mobile
-  npx expo export -p web        # יוצר/מעדכן את mobile\dist
-  cd dist
-  vercel --prod
-  ```
-- **Android APK** (`mobile\public\link-checker.apk`, גם מוגש דרך ה-PWA
-  ב-`/link-checker.apk`) — **בנוי מהקוד הישן**. חייב build חדש דרך EAS
-  כדי לשקף את העיצוב החדש:
-  ```powershell
-  cd mobile
-  eas build --profile preview --platform android
-  ```
-  (אח"כ להוריד את ה-APK החדש מ-expo.dev ולהחליף את
-  `mobile\public\link-checker.apk`, ואז לפרוס מחדש את ה-PWA כמו למעלה
-  כדי שגם קישור ההורדה יגיש את הגרסה החדשה.)
+- **PWA** (`https://verifyweb-phi.vercel.app`) — ✅ **פרוס מחדש
+  ונבדק** (2026-07-30) — מציג את העיצוב החדש (כותרת "Verify",
+  manifest.json מעודכן, אומת עם `curl`).
+- **Android APK** — ✅ **הושלם** (2026-07-30). שני builds רצו: הראשון
+  (`da88026a`) בלי `expo-updates`, לא בשימוש. **השני (`055b9686`) הוא
+  הנכון** — כולל `expo-updates`, הורד והוחלף בפועל ב-
+  `mobile\public\link-checker.apk` (66MB, אומת עם `curl` שהקובץ החי
+  ב-`verifyweb-phi.vercel.app/link-checker.apk` תואם בגודלו בדיוק).
+  ה-PWA נפרס מחדש אחרי ההחלפה (ראה למטה). לוגי ה-build הנכון:
+  https://expo.dev/accounts/ronpar19/projects/mobile/builds/055b9686-ae5b-42e1-97f2-a940e23393dc
+  **טרם נבדק בפועל על מכשיר**: שה-APK אכן מתקין ופועל, ושעדכון עתידי
+  דרך `eas update` באמת מגיע אליו — כדאי לבדוק בפעם הראשונה שיש שינוי
+  JS-בלבד לשלוח.
+- **שם התצוגה של האפליקציה** — ✅ כבר "Verify" בכל מקום (נבדק
+  ב-`app.json`, אין override נפרד ל-android) — תקף גם בשני ה-builds
+  של היום וגם ב-PWA.
+
+### 🔄 EAS Update הוגדר (2026-07-30) — עדכוני JS יהיו אוטומטיים מה-build הבא
+הותקן `expo-updates` (`~29.0.19`) דרך `eas update:configure --non-interactive`.
+זה שינה:
+- `mobile/app.json`: נוסף `runtimeVersion: {"policy":"appVersion"}` ו-
+  `updates.url: "https://u.expo.dev/00d908b2-81d7-4ccd-97f0-59c2587d9cf8"`.
+- `mobile/eas.json`: לכל build profile יש עכשיו `channel` (הפרופיל
+  שבשימוש בפועל, `preview`, מפורסם ל-channel בשם `"preview"`).
+
+**איך זה עובד מעכשיו** (אחרי שה-build הבא באפליקציה כבר כולל את
+`expo-updates`): לכל שינוי **JS בלבד** (כמו כל מה שעשינו היום — עיצוב,
+טקסטים, לוגיקה) — **אין צורך ב-build חדש בכלל**. מריצים:
+```powershell
+cd mobile
+eas update --channel preview --message "תיאור קצר של השינוי"
+```
+וכל מי שכבר מותקן אצלו האפליקציה יקבל את זה אוטומטית (בפעם הבאה
+שהוא פותח את האפליקציה, בהינתן חיבור לאינטרנט). **build חדש (עם הורדת
+APK ידנית) עדיין נדרש רק** כשמוסיפים ספרייה native חדשה (כמו
+`react-native-svg`/`expo-linear-gradient` שהוספנו קודם בשיחה הזו) או
+משנים משהו ב-`app.json` שדורש קומפילציה native (אייקונים, שם
+האפליקציה וכו').
+
+### ⚠️ מלכודת אמיתית שנתקלנו בה בפריסת ה-PWA — לזכור בכל פריסה עתידית
+`npx expo export -p web` **מוחק ומייצר מחדש** את כל תיקיית `mobile\dist`
+— כולל את `dist\.vercel\project.json` שמקשר אותה לפרויקט הנכון
+(`verify_web`)! אם מריצים `vercel --prod` מיד אחרי export בלי לבדוק,
+ה-CLI **יוצר פרויקט Vercel חדש בטעות** (בשם התיקייה, כלומר "dist")
+במקום לפרוס ל-`verifyweb-phi.vercel.app`. בדיוק זה קרה בשיחה הזו —
+נוצר פרויקט מיותר `dist-one-dun-68.vercel.app` שהמשתמש בחר **להשאיר
+בינתיים** (לא למחוק, לא בשימוש). **הנוהל הנכון לכל פריסה עתידית**:
+```powershell
+cd mobile
+npx expo export -p web
+cd dist
+npx vercel link --project verify_web --yes    # קריטי! לפני vercel --prod
+npx vercel --prod --yes
+```
 
 **המלצה**: לפני שמריצים build/deploy — לבדוק את כל השינויים פעם אחת
 ב-`npx expo start --web` (יש `.claude\launch.json` מוכן עם קונפיגורציה
@@ -188,15 +228,19 @@ redesign מלא לאפליקציה בשתי סבבים:
 - **Git לא מותקן/לא בשימוש** בפרויקט הזה בכלל.
 
 ## מה עדיין לא נעשה / הצעד הבא
-1. **להריץ build חדש ל-Android** (`eas build --profile preview
-   --platform android`) כדי שהגרסה המחודשת תגיע ל-APK, ולהחליף את
-   `mobile\public\link-checker.apk` בתוצאה.
-2. **לפרוס מחדש את ה-PWA** (`npx expo export -p web` מתוך `mobile`,
-   ואז `vercel --prod` מתוך `mobile\dist`) כדי שהעיצוב החדש יגיע
-   למי שכבר מותקן אצלו וגם למי שמוריד עכשיו.
-3. Budget Alert בגוגל קלאוד — עדיין לא הוגדר (לא דחוף).
-4. חנויות אפליקציות רשמיות (App Store / Google Play) — לא נגענו,
+1. **בדיקה חד-פעמית שטרם בוצעה**: להתקין את ה-APK החדש (`055b9686`)
+   בפועל על מכשיר/אמולטור אנדרואיד, ואז לשלוח עדכון JS-בלבד לבדיקה:
+   ```powershell
+   cd mobile
+   eas update --channel preview --message "בדיקת EAS Update ראשונה"
+   ```
+   ולוודא שהוא מגיע למכשיר בפתיחה הבאה של האפליקציה (בהינתן אינטרנט).
+   זו הפעם היחידה שצריך "לוודא שהצינור עובד" — אחרי זה זה שקוף.
+2. Budget Alert בגוגל קלאוד — עדיין לא הוגדר (לא דחוף).
+3. חנויות אפליקציות רשמיות (App Store / Google Play) — לא נגענו,
    נדחה לטובת PWA + APK עצמאי.
+4. (לא דחוף) להחליט אם למחוק את פרויקט ה-Vercel המיותר "dist"
+   (`dist-one-dun-68.vercel.app`) — המשתמש בחר להשאיר אותו בינתיים.
 
 ## החלטות מפתח ולמה
 - **Web Risk API, לא Safe Browsing v4** (מסחרי + לא deprecated).
