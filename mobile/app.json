@@ -3,6 +3,7 @@
     "name": "Verify",
     "slug": "mobile",
     "version": "1.0.0",
+    "scheme": "verify",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -27,7 +28,14 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-localization"
+      "expo-localization",
+      [
+        "expo-share-intent",
+        {
+          "androidIntentFilters": ["text/*"],
+          "disableIOS": true
+        }
+      ]
     ],
     "extra": {
       "eas": {

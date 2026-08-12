@@ -7,8 +7,11 @@
     "@react-native-async-storage/async-storage": "2.2.0",
     "expo": "~54.0.0",
     "expo-clipboard": "~8.0.8",
+    "expo-constants": "~18.0.13",
     "expo-linear-gradient": "~15.0.8",
+    "expo-linking": "~8.0.12",
     "expo-localization": "~17.0.9",
+    "expo-share-intent": "^5.1.1",
     "expo-status-bar": "~3.0.9",
     "expo-updates": "~29.0.19",
     "react": "19.1.0",
@@ -21,7 +24,11 @@
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
-    "web": "expo start --web"
+    "web": "expo start --web",
+    "postinstall": "patch-package"
   },
-  "private": true
+  "private": true,
+  "devDependencies": {
+    "patch-package": "^8.0.1"
+  }
 }

@@ -205,7 +205,7 @@ function Chip({ Icon, label }) {
   );
 }
 
-export default function LinkCheckerScreen() {
+export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
   const [lang, setLang] = useState(() =>
     getDeviceDefaultLanguage(Localization.getLocales ? Localization.getLocales() : [])
   );
@@ -274,6 +274,18 @@ export default function LinkCheckerScreen() {
 
     if (seq === requestSeqRef.current) setOverallStatus(worst);
   }, [lang, t]);
+
+  // Android "Share" into the app (e.g. selecting text in Messages/WhatsApp
+  // → Share → Verify) lands here: App.js hands us the raw shared text via
+  // this prop, and we run it through the exact same extractUrls()+runCheck()
+  // pipeline as manual paste — no separate logic for the share-intent path.
+  useEffect(() => {
+    if (sharedText) {
+      runCheck(sharedText);
+      onSharedTextHandled && onSharedTextHandled();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sharedText]);
 
   // Same limitation as on the web: there's no API for a regular app to
   // silently read the last SMS on either iOS or Android (by design, for
