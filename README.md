@@ -2,49 +2,73 @@
 
 A mobile app + backend that lets everyday users paste a link (from an
 SMS, email, or WhatsApp message) and get an instant, color-coded
-safety verdict — green (safe), red (dangerous), or yellow (uncertain)
-— without ever leaving the app or exposing them to the link itself.
+safety verdict, without ever leaving the app or exposing them to the
+link itself.
 
-Built end-to-end: React Native/Expo client, a Node.js serverless
-backend on Vercel, Google Web Risk API integration, and a custom
-heuristic layer that catches threats Web Risk hasn't catalogued yet.
+**[Live Demo (PWA)](https://verifyweb-phi.vercel.app)** · **[Android APK](https://verifyweb-phi.vercel.app/link-checker.apk)**
 
-**Live:**
-- PWA: https://verifyweb-phi.vercel.app
-- Backend API: https://verifyapp-khaki.vercel.app/api/check-link
+<!--
+  SCREENSHOT / GIF PLACEHOLDER — replace this comment with a real image
+  or short GIF before publishing, e.g.:
+  ![Verify demo](./docs/demo.gif)
+  Suggested capture: paste link → checking state → red/green/yellow result.
+-->
 
----
+## What it checks for, and how results are labeled
+
+- 🟢 **No known threat detected** — not on any known threat list, and
+  the link's own structure doesn't look suspicious.
+- 🔴 **Likely dangerous** — confirmed by Google Web Risk, or a strong
+  structural red flag (e.g. the `@`-trick, a raw IP address).
+- 🟡 **Uncertain** — not yet catalogued as a known threat, but the
+  link's structure raises some suspicion. Treated as "be careful,"
+  not "safe."
+
+(Deliberately not calling anything "guaranteed safe" — see *Why this
+project is interesting* below for why.)
+
+## What I built
+
+- React Native (Expo) mobile client — PWA + Android APK
+- Serverless Node.js backend on Vercel
+- Google Web Risk API integration
+- A custom structural heuristic layer (second opinion / fallback)
+- Redirect resolution + SSRF protection
+- Per-IP rate limiting and usage stats, backed by Upstash Redis
+- 38/38 automated tests (backend logic + URL extraction), no live
+  API calls required to run
 
 ## Why this project is interesting (the engineering decisions)
 
-- **API key never touches the client.** The Google API key lives only
-  as a server-side environment variable on Vercel. The mobile app
-  never sees it, so it can't be extracted by unpacking the app bundle.
-- **Web Risk, not Safe Browsing v4.** Safe Browsing is free but
-  explicitly forbids commercial use and is officially deprecated.
-  Web Risk is the supported, commercially-usable successor — a
-  deliberate choice for a project meant to be maintained long-term.
-- **Two independent signals, not one.** Web Risk only knows about
-  *already-catalogued* threats. A local structural heuristic (domain
-  patterns, the `@`-trick, raw IPs, suspicious TLDs, brand
-  impersonation) acts as a second opinion — and as the sole signal if
-  Web Risk is ever unavailable. A "safe" verdict from Web Risk still
-  gets checked against the heuristic before being trusted outright.
-- **Basic SSRF hardening.** The backend resolves redirects itself
-  (to catch shortened links) and refuses to follow a redirect into a
-  private/loopback/link-local address — with a documented limitation
-  (literal-hostname check, not DNS-resolution) and a clear upgrade
-  path if the threat model ever changes.
-- **Fails safe, not silent.** Any failure in the chain (bad key,
-  network error, malformed input) degrades to a cautious "uncertain"
-  result instead of crashing or hanging — the user is never left
-  without an answer.
-- **API abuse protection.** The endpoint is rate-limited per IP and
-  gated by a shared-secret header, so the free Google Web Risk quota
-  can't be silently drained by a public, unauthenticated endpoint.
-- **38/38 tests passing** (23 backend logic tests + 15 URL-extraction
-  tests) run against a mocked `fetch`, so the suite runs offline with
-  no API key or network needed.
+- **Secure server-side API key handling.** The Google API key lives
+  only as a server-side environment variable on Vercel — never in
+  the client bundle, so it can't be extracted by unpacking the app.
+- **Two independent detection signals, not one.** Google Web Risk
+  only knows about *already-catalogued* threats. A local structural
+  heuristic (domain patterns, brand impersonation, suspicious TLDs)
+  acts as a second opinion, and as the sole signal if Web Risk is
+  ever unavailable.
+- **SSRF-aware redirect resolution.** The backend resolves redirects
+  itself (to catch shortened links) and refuses to follow one into a
+  private/loopback/link-local address.
+- **Rate limiting + fail-safe error handling.** The public endpoint
+  is protected from abuse of the free API quota, and any failure in
+  the chain degrades to a cautious "uncertain" result instead of
+  crashing — the user is never left without an answer.
+
+Two of these decisions are worth spelling out, because they came up
+in actual product tradeoffs:
+
+A **"safe" verdict from Web Risk still gets checked against the
+heuristic before being trusted outright** — Web Risk is a list
+lookup, not live content analysis, so a brand-new phishing link or a
+freshly-compromised legitimate site won't be on it yet. Trusting it
+blindly would give users false confidence.
+
+**Web Risk, not Safe Browsing v4** — Safe Browsing is free but
+explicitly forbids commercial use and is officially deprecated. Web
+Risk is the supported, commercially-usable successor, chosen
+deliberately for a project meant to be maintained long-term.
 
 ## Tech stack
 
@@ -66,6 +90,9 @@ heuristic layer that catches threats Web Risk hasn't catalogued yet.
                                         to their real destination first
 ```
 
+Backend API (for reference, not meant for direct browsing):
+`https://verifyapp-khaki.vercel.app/api/check-link`
+
 ## What the backend actually does (`api/check-link.js`)
 
 1. Validates the request is `POST` with a non-empty `link` string.
@@ -76,8 +103,7 @@ heuristic layer that catches threats Web Risk hasn't catalogued yet.
 4. Calls Google Web Risk to check the URL against `MALWARE`,
    `SOCIAL_ENGINEERING`, and `UNWANTED_SOFTWARE` threat lists.
 5. Cross-checks the result against a local structural heuristic
-   before returning a final verdict of `safe`, `danger`, or
-   `uncertain`.
+   before returning a final verdict.
 6. Any failure anywhere in that chain degrades to a cautious
    `"unknown"` result with a `200` — the app never crashes or hangs.
 
