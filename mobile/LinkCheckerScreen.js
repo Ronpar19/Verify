@@ -119,14 +119,11 @@ function StatusIcon({ status, size = 24 }) {
   return <LinkLogoIcon size={size * 0.7} color={COLORS.textSecondary} />;
 }
 
-function ResultCard({ status, url, details, t, rtl, onReset, onOpen }) {
+function ResultCard({ status, url, details, t, rtl, onReset }) {
   const palette = paletteFor(status);
   const title = status === 'safe' ? t.safeTitle : status === 'danger' ? t.dangerTitle : t.unknownTitle;
   const subtitle =
     details || (status === 'safe' ? t.safeSubtitle(hostnameOf(url)) : status === 'danger' ? t.dangerSubtitle : t.unknownSubtitle);
-  const actionLabel = status === 'danger' ? t.blockBtn : status === 'unknown' ? t.openAnywayBtn : t.openLinkBtn;
-  const actionHandler = status === 'danger' ? onReset : onOpen;
-  const actionColor = status === 'danger' ? COLORS.danger : status === 'unknown' ? COLORS.unknown : COLORS.success;
 
   return (
     <View style={[styles.resultCard, { borderColor: palette.border }]}>
@@ -139,9 +136,11 @@ function ResultCard({ status, url, details, t, rtl, onReset, onOpen }) {
         <TouchableOpacity style={styles.resultBtnSecondary} onPress={onReset}>
           <Text style={styles.resultBtnSecondaryText}>{t.checkAnotherBtn}</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={[styles.resultBtnPrimary, { backgroundColor: actionColor }]} onPress={actionHandler}>
-          <Text style={styles.resultBtnPrimaryText}>{actionLabel}</Text>
-        </TouchableOpacity>
+        {status === 'danger' && (
+          <TouchableOpacity style={[styles.resultBtnPrimary, { backgroundColor: COLORS.danger }]} onPress={onReset}>
+            <Text style={styles.resultBtnPrimaryText}>{t.blockBtn}</Text>
+          </TouchableOpacity>
+        )}
       </View>
     </View>
   );
@@ -287,10 +286,6 @@ export default function LinkCheckerScreen() {
     setLangPickerVisible(false);
   }, []);
 
-  const handleOpenLink = useCallback((url) => {
-    Linking.openURL(normalizeUrl(url));
-  }, []);
-
   const handleAndroidDownload = useCallback(() => {
     Linking.openURL(APK_URL);
   }, []);
@@ -380,7 +375,6 @@ export default function LinkCheckerScreen() {
               t={t}
               rtl={rtl}
               onReset={handleClear}
-              onOpen={() => handleOpenLink(checks[0].url)}
             />
           )}
 
