@@ -58,6 +58,11 @@ const LOGO_SOURCE = require('./assets/logo.png');
 const API_URL =
   process.env.EXPO_PUBLIC_API_URL || 'https://YOUR-PROJECT.vercel.app/api/check-link';
 
+// Partial abuse protection only — see README "Part D". Since this is
+// inlined into the app bundle at build time, it stops someone who just
+// finds the bare endpoint URL, not someone who decompiles the app.
+const APP_SECRET = process.env.EXPO_PUBLIC_APP_SECRET || '';
+
 // The PWA build of this same app (what the iOS "Add to Home Screen" flow
 // points at) and the standalone Android APK it serves.
 const WEB_APP_URL = 'https://verifyweb-phi.vercel.app';
@@ -245,7 +250,10 @@ export default function LinkCheckerScreen() {
       try {
         const response = await fetch(API_URL, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...(APP_SECRET ? { 'x-app-secret': APP_SECRET } : {}),
+          },
           body: JSON.stringify({ link: urls[i], lang }),
         });
         const data = await response.json();

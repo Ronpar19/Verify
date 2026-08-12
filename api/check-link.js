@@ -22,9 +22,19 @@
 // (pre-i18n) Hebrew strings, so existing callers and existing tests are
 // unaffected.
 
+import { Ratelimit } from '@upstash/ratelimit';
+import { getRedis } from './_lib/redis.js';
+import { recordCheck } from './_lib/stats.js';
+
 const THREAT_TYPES = ['MALWARE', 'SOCIAL_ENGINEERING', 'UNWANTED_SOFTWARE'];
 const MAX_REDIRECTS = 5;
 const FETCH_TIMEOUT_MS = 6000;
+
+// Per-IP rate limit: protects the free Web Risk quota (100k calls/month)
+// from a scraped/leaked endpoint URL being hammered. See README "Security
+// notes" for the reasoning and the shared-IP (NAT/carrier) caveat.
+const RATE_LIMIT_MAX = 20;
+const RATE_LIMIT_WINDOW = '1 h';
 
 const SUPPORTED_LANGS = ['he', 'en', 'ru', 'fr', 'ar'];
 const DEFAULT_LANG = 'he';
@@ -37,6 +47,8 @@ const MESSAGES = {
   he: {
     ssrfPrefix: 'הקישור מפנה לכתובת רשת פרטית/פנימית — חריג מאוד עבור קישור שנשלח אליך. ',
     genericError: 'לא הצלחנו לבדוק את הקישור כרגע, נסו שוב',
+    unauthorized: 'הבקשה לא אושרה',
+    rateLimited: 'קיבלנו יותר מדי בקשות ממכשיר זה בזמן קצר. נסו שוב בעוד קצת.',
     threatLabels: {
       MALWARE: 'תוכנה זדונית',
       SOCIAL_ENGINEERING: 'פישינג / הונאה',
@@ -66,6 +78,8 @@ const MESSAGES = {
   en: {
     ssrfPrefix: 'This link points to a private/internal network address — highly unusual for a link sent to you. ',
     genericError: 'We could not check this link right now, please try again',
+    unauthorized: 'Request not authorized',
+    rateLimited: 'Too many requests from this device in a short time. Please try again later.',
     threatLabels: {
       MALWARE: 'Malware',
       SOCIAL_ENGINEERING: 'Phishing / scam',
@@ -95,6 +109,8 @@ const MESSAGES = {
   ru: {
     ssrfPrefix: 'Эта ссылка ведёт на частный/внутренний сетевой адрес — крайне необычно для ссылки, присланной вам. ',
     genericError: 'Не удалось проверить эту ссылку сейчас, попробуйте снова',
+    unauthorized: 'Запрос не авторизован',
+    rateLimited: 'Слишком много запросов с этого устройства за короткое время. Пожалуйста, повторите попытку позже.',
     threatLabels: {
       MALWARE: 'Вредоносное ПО',
       SOCIAL_ENGINEERING: 'Фишинг / мошенничество',
@@ -124,6 +140,8 @@ const MESSAGES = {
   fr: {
     ssrfPrefix: "Ce lien pointe vers une adresse réseau privée/interne — très inhabituel pour un lien qui vous a été envoyé. ",
     genericError: 'Impossible de vérifier ce lien pour le moment, veuillez réessayer',
+    unauthorized: 'Requête non autorisée',
+    rateLimited: 'Trop de requêtes depuis cet appareil en peu de temps. Veuillez réessayer plus tard.',
     threatLabels: {
       MALWARE: 'Logiciel malveillant',
       SOCIAL_ENGINEERING: 'Hameçonnage / arnaque',
@@ -153,6 +171,8 @@ const MESSAGES = {
   ar: {
     ssrfPrefix: 'يشير هذا الرابط إلى عنوان شبكة خاص/داخلي — وهذا أمر غير معتاد جدًا لرابط أُرسل إليك. ',
     genericError: 'تعذّر فحص هذا الرابط الآن، يرجى المحاولة مرة أخرى',
+    unauthorized: 'الطلب غير مصرح به',
+    rateLimited: 'تلقينا عددًا كبيرًا جدًا من الطلبات من هذا الجهاز خلال وقت قصير. يرجى المحاولة مرة أخرى لاحقًا.',
     threatLabels: {
       MALWARE: 'برمجية خبيثة',
       SOCIAL_ENGINEERING: 'تصيّد احتيالي / احتيال',
@@ -202,6 +222,99 @@ const KNOWN_SAFE_DOMAINS = ['google.com','facebook.com','amazon.com','apple.com'
 const BRAND_KEYWORDS = ['paypal','amazon','microsoft','apple','google','facebook','netflix','bituach','bank','leumi','hapoalim','discount','mizrahi','postil','paybox'];
 const URGENT_WORDS = ['verify','confirm','update','secure','suspended','urgent','login','password','account'];
 
+// ---------- rate limiting (per IP, via Upstash Redis) ----------
+//
+// Lazily built once per warm serverless instance, and only if
+// UPSTASH_REDIS_REST_URL/TOKEN are actually set — same graceful-
+// degradation pattern as GOOGLE_API_KEY above: if it's not configured
+// (local dev, or you haven't set it up yet), rate limiting is simply
+// skipped rather than breaking every request.
+let ratelimiterInstance; // undefined = not attempted yet, null = unavailable
+let ratelimiterOverride = null; // test-only seam, see __setRatelimiterForTests
+
+// Test-only hook: lets test.mjs inject a fake `{ limit(id) }` object so the
+// 429 path (and the "allowed" path) can be exercised without a real Redis.
+export function __setRatelimiterForTests(fakeLimiter) {
+  ratelimiterOverride = fakeLimiter;
+}
+
+function getRatelimiter() {
+  if (ratelimiterOverride) return ratelimiterOverride;
+  if (ratelimiterInstance !== undefined) return ratelimiterInstance;
+
+  const redis = getRedis();
+  if (!redis) {
+    console.error('UPSTASH_REDIS_REST_URL/UPSTASH_REDIS_REST_TOKEN not set — rate limiting is disabled');
+    ratelimiterInstance = null;
+    return null;
+  }
+
+  ratelimiterInstance = new Ratelimit({
+    redis,
+    limiter: Ratelimit.slidingWindow(RATE_LIMIT_MAX, RATE_LIMIT_WINDOW),
+    analytics: false,
+    prefix: 'verify-ratelimit',
+  });
+  return ratelimiterInstance;
+}
+
+function clientIp(req) {
+  const fwd = req.headers && req.headers['x-forwarded-for'];
+  if (typeof fwd === 'string' && fwd.trim()) return fwd.split(',')[0].trim();
+  const real = req.headers && req.headers['x-real-ip'];
+  if (typeof real === 'string' && real.trim()) return real.trim();
+  return null;
+}
+
+// Returns { limited: false } to allow the request through — including when
+// rate limiting isn't configured, the IP can't be determined, or Redis
+// itself errors out (fail OPEN: a Redis hiccup should never break the app
+// for a real user, same philosophy as the Web Risk fallback above).
+async function checkRateLimit(req) {
+  const limiter = getRatelimiter();
+  if (!limiter) return { limited: false };
+
+  const ip = clientIp(req);
+  if (!ip) return { limited: false }; // never lump unresolvable IPs into one shared bucket
+
+  try {
+    const { success, reset } = await limiter.limit(ip);
+    return { limited: !success, reset };
+  } catch (err) {
+    console.error('check-link error (ratelimit):', err);
+    return { limited: false };
+  }
+}
+
+// ---------- shared-secret check ----------
+//
+// Partial protection only: EXPO_PUBLIC_* values are inlined into the app
+// bundle at build time, so anyone who unpacks the APK/web bundle can
+// extract this value. It stops casual/accidental abuse (someone finding
+// the bare endpoint URL), not a determined attacker. Skipped entirely if
+// APP_SECRET isn't set on the server, same graceful-degradation pattern
+// as everything else here.
+function isAuthorized(req) {
+  const expected = process.env.APP_SECRET;
+  if (!expected) return true; // not configured -> don't enforce
+  return req.headers && req.headers['x-app-secret'] === expected;
+}
+
+// ---------- usage counters (privacy-conscious, see api/_lib/stats.js) ----------
+//
+// Every completed check (any status, including "unknown") funnels through
+// here so the counters and the actual response never drift apart. Never
+// stores the checked link's content — only the resulting status and a
+// salted hash of the IP for same-day dedup.
+async function sendVerdict(req, res, status, details) {
+  try {
+    await recordCheck(getRedis(), { status, ip: clientIp(req) });
+  } catch (err) {
+    console.error('check-link error (stats):', err);
+  }
+  return res.status(200).json({ status, details });
+}
+
 export default async function handler(req, res) {
   // CORS: the mobile app (Expo Go / the installed native/EAS build) calls
   // this directly with no browser involved, so none of this applies to it.
@@ -213,7 +326,7 @@ export default async function handler(req, res) {
   // change its risk profile.
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-app-secret');
 
   // Browsers send an OPTIONS "preflight" request before the real POST for
   // any cross-origin request with a JSON body — answer it directly instead
@@ -231,6 +344,18 @@ export default async function handler(req, res) {
   const lang = resolveLang(rawLang);
   const m = MESSAGES[lang];
 
+  if (!isAuthorized(req)) {
+    return res.status(401).json({ status: 'unknown', details: m.unauthorized });
+  }
+
+  const rateLimit = await checkRateLimit(req);
+  if (rateLimit.limited) {
+    if (rateLimit.reset) {
+      res.setHeader('Retry-After', Math.max(1, Math.ceil((rateLimit.reset - Date.now()) / 1000)));
+    }
+    return res.status(429).json({ status: 'unknown', details: m.rateLimited });
+  }
+
   if (!link || typeof link !== 'string' || !link.trim()) {
     return res.status(400).json({ status: 'unknown', details: 'Missing "link" in request body' });
   }
@@ -247,12 +372,9 @@ export default async function handler(req, res) {
       // instead of a content-free "unknown".
       const heuristic = heuristicAnalysis(err.attemptedUrl, lang);
       const statusMap = { safe: 'uncertain', uncertain: 'uncertain', unsafe: 'danger' };
-      return res.status(200).json({
-        status: statusMap[heuristic.verdict] || 'uncertain',
-        details: m.ssrfPrefix + heuristic.reasons.join('; ')
-      });
+      return sendVerdict(req, res, statusMap[heuristic.verdict] || 'uncertain', m.ssrfPrefix + heuristic.reasons.join('; '));
     }
-    return res.status(200).json({ status: 'unknown', details: m.genericError });
+    return sendVerdict(req, res, 'unknown', m.genericError);
   }
 
   const apiKey = process.env.GOOGLE_API_KEY;
@@ -271,7 +393,7 @@ export default async function handler(req, res) {
   // Web Risk found a confirmed match — that's a strong, reliable signal.
   // Trust it outright; no need for a second opinion.
   if (webRiskResult && webRiskResult.status === 'danger') {
-    return res.status(200).json(webRiskResult);
+    return sendVerdict(req, res, webRiskResult.status, webRiskResult.details);
   }
 
   const heuristic = heuristicAnalysis(finalUrl, lang);
@@ -280,18 +402,12 @@ export default async function handler(req, res) {
     // Web Risk unavailable (bad/missing key, network error, quota) — the
     // heuristic is the only signal we have, so use its full verdict range.
     const statusMap = { safe: 'safe', uncertain: 'uncertain', unsafe: 'danger' };
-    return res.status(200).json({
-      status: statusMap[heuristic.verdict],
-      details: m.heuristicOnlyPrefix + heuristic.reasons.join('; ')
-    });
+    return sendVerdict(req, res, statusMap[heuristic.verdict], m.heuristicOnlyPrefix + heuristic.reasons.join('; '));
   }
 
   if (heuristic.verdict === 'safe') {
     // Both signals agree.
-    return res.status(200).json({
-      status: 'safe',
-      details: webRiskResult.details + m.bothSafeSuffix
-    });
+    return sendVerdict(req, res, 'safe', webRiskResult.details + m.bothSafeSuffix);
   }
 
   // Web Risk found nothing on its lists yet, but the heuristic caught a
@@ -303,20 +419,14 @@ export default async function handler(req, res) {
   // stay "uncertain" below, since those alone are common on legitimate
   // small/older sites too.
   if (heuristic.highConfidence) {
-    return res.status(200).json({
-      status: 'danger',
-      details: m.heuristicDangerPrefix + heuristic.reasons.join('; ')
-    });
+    return sendVerdict(req, res, 'danger', m.heuristicDangerPrefix + heuristic.reasons.join('; '));
   }
 
   // Everything else: Web Risk found nothing on its lists, and the URL's
   // own structure looks suspicious but isn't a smoking gun — don't hand
   // out false confidence, but don't cry "danger" on a legitimate site
   // either.
-  return res.status(200).json({
-    status: 'uncertain',
-    details: m.uncertainPrefix + heuristic.reasons.join('; ')
-  });
+  return sendVerdict(req, res, 'uncertain', m.uncertainPrefix + heuristic.reasons.join('; '));
 }
 
 function normalizeUrl(raw) {
