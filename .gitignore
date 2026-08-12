@@ -12,3 +12,7 @@ node_modules/
 mobile/public/*.apk
 frontend/
 verify.demo/
+
+# private backup of operational details trimmed from the public docs
+# (deployment gotchas, Upstash setup, secrets handling) — local reference only
+INTERNAL-NOTES.md
