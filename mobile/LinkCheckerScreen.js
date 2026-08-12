@@ -14,7 +14,7 @@
 // also sent to the backend as `lang` so the returned `details` text (Web
 // Risk / heuristic explanations) comes back in the same language.
 
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   SafeAreaView,
   View,
@@ -35,6 +35,7 @@ import * as Clipboard from 'expo-clipboard';
 import * as Localization from 'expo-localization';
 import { LANGUAGES, STRINGS, isRTL, getDeviceDefaultLanguage } from './translations';
 import { extractUrls } from './extractUrls';
+import { getTermsBody, TERMS_UPDATED_DATE } from './terms';
 import {
   LinkLogoIcon,
   GlobeIcon,
@@ -62,7 +63,7 @@ const API_URL =
 const WEB_APP_URL = 'https://verifyweb-phi.vercel.app';
 const APK_URL = `${WEB_APP_URL}/link-checker.apk`;
 
-const COLORS = {
+export const COLORS = {
   bg: '#EEF0F6',
   surface: '#FFFFFF',
   text: '#1B1E2B',
@@ -206,8 +207,11 @@ export default function LinkCheckerScreen() {
   const [langPickerVisible, setLangPickerVisible] = useState(false);
   const [menuVisible, setMenuVisible] = useState(false);
   const [iosHelpVisible, setIosHelpVisible] = useState(false);
+  const [termsVisible, setTermsVisible] = useState(false);
   const t = STRINGS[lang];
   const rtl = isRTL(lang);
+  const { text: termsBody, isFallback: termsIsFallback } = getTermsBody(lang);
+  const termsBodyIsRTL = termsIsFallback ? true : rtl;
 
   const [link, setLink] = useState('');
   // One entry per link found in the pasted text. Each entry's status is
@@ -407,6 +411,9 @@ export default function LinkCheckerScreen() {
           )}
 
           <Text style={styles.footer}>{t.footer}</Text>
+          <TouchableOpacity onPress={() => setTermsVisible(true)}>
+            <Text style={styles.termsLink}>{t.termsFooterLink}</Text>
+          </TouchableOpacity>
         </ScrollView>
 
         <Modal visible={menuVisible} transparent onRequestClose={() => setMenuVisible(false)}>
@@ -501,6 +508,45 @@ export default function LinkCheckerScreen() {
                   <Text style={styles.resultBtnPrimaryText}>{t.iosHelpContinueBtn}</Text>
                 </TouchableOpacity>
               </View>
+            </Pressable>
+          </Pressable>
+        </Modal>
+
+        <Modal visible={termsVisible} transparent onRequestClose={() => setTermsVisible(false)}>
+          <Pressable style={styles.modalBackdrop} onPress={() => setTermsVisible(false)}>
+            <Pressable style={styles.termsCard} onPress={() => {}}>
+              <View style={[styles.termsCardHeader, { flexDirection: rtl ? 'row-reverse' : 'row' }]}>
+                <Text style={styles.termsCardTitle}>{t.termsTitle}</Text>
+                <TouchableOpacity onPress={() => setTermsVisible(false)} style={styles.drawerClose}>
+                  <Text style={styles.drawerCloseText}>×</Text>
+                </TouchableOpacity>
+              </View>
+              <Text style={[styles.termsUpdated, { textAlign: rtl ? 'right' : 'left' }]}>
+                {t.termsUpdatedLabel(TERMS_UPDATED_DATE)}
+              </Text>
+              {termsIsFallback && (
+                <Text style={[styles.fallbackNotice, { textAlign: rtl ? 'right' : 'left' }]}>
+                  {t.termsFallbackNotice}
+                </Text>
+              )}
+              <ScrollView style={styles.termsScroll}>
+                <Text
+                  style={[
+                    styles.termsBody,
+                    termsBodyIsRTL
+                      ? { textAlign: 'right', writingDirection: 'rtl' }
+                      : { textAlign: 'left', writingDirection: 'ltr' },
+                  ]}
+                >
+                  {termsBody}
+                </Text>
+              </ScrollView>
+              <TouchableOpacity
+                style={[styles.resultBtnSecondary, styles.resultBtnFull]}
+                onPress={() => setTermsVisible(false)}
+              >
+                <Text style={styles.resultBtnSecondaryText}>{t.termsCloseBtn}</Text>
+              </TouchableOpacity>
             </Pressable>
           </Pressable>
         </Modal>
@@ -694,6 +740,24 @@ const styles = StyleSheet.create({
   footer: {
     marginTop: 18, color: COLORS.textSecondary, fontSize: 11, textAlign: 'center', paddingHorizontal: 8,
   },
+  termsLink: {
+    marginTop: 8, color: COLORS.accent, fontSize: 12, fontWeight: '600', textAlign: 'center',
+  },
+  termsCard: {
+    position: 'absolute', top: '8%', bottom: '8%', left: 20, right: 20,
+    backgroundColor: COLORS.surface, borderRadius: 18, padding: 22,
+    shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 20, shadowOffset: { width: 0, height: 10 },
+    elevation: 12,
+  },
+  termsCardHeader: { alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
+  termsCardTitle: { flex: 1, fontSize: 16, fontWeight: '700', color: COLORS.text },
+  termsUpdated: { fontSize: 12, color: COLORS.textSecondary, marginBottom: 4 },
+  fallbackNotice: {
+    fontSize: 12, color: COLORS.unknown, backgroundColor: COLORS.unknownBg,
+    borderRadius: 8, paddingVertical: 6, paddingHorizontal: 10, marginTop: 6,
+  },
+  termsScroll: { flex: 1, marginTop: 10 },
+  termsBody: { fontSize: 13.5, lineHeight: 21, color: COLORS.text, paddingBottom: 8 },
   helpCard: {
     position: 'absolute', top: '50%', left: 20, right: 20, marginTop: -180,
     backgroundColor: COLORS.surface, borderRadius: 18, padding: 22,
