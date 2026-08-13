@@ -75,6 +75,26 @@ export function WarningIcon({ size = 24, color = '#E0453F' }) {
   );
 }
 
+// X mark — danger-result icon (logo badge + result card).
+export function CloseIcon({ size = 24, color = '#E0453F' }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path d="M6 6l12 12M18 6L6 18" stroke={color} strokeWidth="2.6" strokeLinecap="round" />
+    </Svg>
+  );
+}
+
+// Minimal abstract smiley — logo badge default (before any check has run).
+export function SmileyIcon({ size = 24, color = '#fff' }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Circle cx="8.5" cy="10" r="1.3" fill={color} />
+      <Circle cx="15.5" cy="10" r="1.3" fill={color} />
+      <Path d="M7.5 14.5c1 1.3 2.6 2 4.5 2s3.5-.7 4.5-2" stroke={color} strokeWidth="1.8" strokeLinecap="round" fill="none" />
+    </Svg>
+  );
+}
+
 // Shield — "secure" feature chip.
 export function ShieldIcon({ size = 18, color = '#3F5AE0' }) {
   return (

@@ -25,7 +25,6 @@ import {
   Modal,
   ActivityIndicator,
   ScrollView,
-  Image,
   Linking,
   StyleSheet,
   Platform,
@@ -45,13 +44,12 @@ import {
   SearchIcon,
   ClipboardIcon,
   CheckIcon,
-  WarningIcon,
+  CloseIcon,
+  SmileyIcon,
   ShieldIcon,
   BoltIcon,
   SearchAdvancedIcon,
 } from './icons';
-
-const LOGO_SOURCE = require('./assets/logo.png');
 
 // Prefer an EXPO_PUBLIC_ env var (Expo inlines these at build time) so you
 // don't have to hardcode the URL. Falls back to a literal you should edit.
@@ -89,6 +87,63 @@ export const COLORS = {
   unknownBorder: '#F3E1B8',
 };
 
+// Full-screen theme per check result. idle/loading keep the app's normal
+// light look; safe/danger/unknown recolor the background, logo, corner
+// buttons and check button to match the verdict.
+const STATUS_THEMES = {
+  idle: {
+    bg: [COLORS.bg, COLORS.bg],
+    logoBg: COLORS.accent,
+    badgeBg: COLORS.accent,
+    titleColor: COLORS.text,
+    taglineColor: COLORS.textSecondary,
+    cornerBg: COLORS.surface,
+    cornerBorder: COLORS.border,
+    cornerIcon: COLORS.textSecondary,
+    inputIcon: COLORS.accent,
+    buttonGradient: [COLORS.accent, COLORS.accentDark],
+  },
+  safe: {
+    bg: ['#EAF6EC', '#DCEEDF'],
+    logoBg: '#1E4B32',
+    badgeBg: COLORS.success,
+    titleColor: '#173F29',
+    taglineColor: '#3E6B4F',
+    cornerBg: 'rgba(255,255,255,0.6)',
+    cornerBorder: 'rgba(23,63,41,0.15)',
+    cornerIcon: '#1E4B32',
+    inputIcon: COLORS.success,
+    buttonGradient: [COLORS.success, '#146B3A'],
+  },
+  danger: {
+    bg: ['#7A2020', '#B33636'],
+    logoBg: '#5C1717',
+    badgeBg: '#E5484D',
+    titleColor: '#FFFFFF',
+    taglineColor: 'rgba(255,255,255,0.85)',
+    cornerBg: 'rgba(255,255,255,0.18)',
+    cornerBorder: 'rgba(255,255,255,0.25)',
+    cornerIcon: '#FFFFFF',
+    inputIcon: COLORS.danger,
+    buttonGradient: ['#6B1717', '#4A1010'],
+  },
+  unknown: {
+    bg: ['#FBF2D9', '#F7E7BE'],
+    logoBg: '#C9971C',
+    badgeBg: COLORS.unknown,
+    titleColor: '#5C3D08',
+    taglineColor: '#8A6A2E',
+    cornerBg: 'rgba(255,255,255,0.6)',
+    cornerBorder: 'rgba(185,119,14,0.2)',
+    cornerIcon: '#5C3D08',
+    inputIcon: COLORS.unknown,
+    buttonGradient: [COLORS.unknown, '#8A5B0B'],
+  },
+};
+function themeFor(status) {
+  return STATUS_THEMES[status] || STATUS_THEMES.idle;
+}
+
 // If a message has several links, the overall verdict should be the most
 // cautious one found across all of them — danger beats unknown beats safe,
 // and it only ever escalates (never downgrades) as results come in.
@@ -118,11 +173,29 @@ function hostnameOf(url) {
 
 function StatusIcon({ status, size = 24 }) {
   if (status === 'safe') return <CheckIcon size={size} color={COLORS.success} />;
-  if (status === 'danger') return <WarningIcon size={size} color={COLORS.danger} />;
+  if (status === 'danger') return <CloseIcon size={size} color={COLORS.danger} />;
   if (status === 'unknown') {
     return <Text style={{ fontSize: size * 0.85, fontWeight: '800', color: COLORS.unknown }}>?</Text>;
   }
   return <LinkLogoIcon size={size * 0.7} color={COLORS.textSecondary} />;
+}
+
+// The circular app logo in the header. The small badge in its bottom-right
+// corner mirrors the current verdict — a plain smiley until a check has
+// run, then a checkmark/X/question-mark matching the result.
+function LogoBadge({ status, theme }) {
+  const badgeIcon =
+    status === 'safe' ? <CheckIcon size={13} color="#fff" />
+    : status === 'danger' ? <CloseIcon size={13} color="#fff" />
+    : status === 'unknown' ? <Text style={styles.logoBadgeQuestionText}>?</Text>
+    : <SmileyIcon size={14} color="#fff" />;
+
+  return (
+    <View style={[styles.logoBox, { backgroundColor: theme.logoBg }]}>
+      <LinkLogoIcon size={34} color="#fff" />
+      <View style={[styles.logoBadgeCircle, { backgroundColor: theme.badgeBg }]}>{badgeIcon}</View>
+    </View>
+  );
 }
 
 function ResultCard({ status, url, details, t, rtl, onReset }) {
@@ -324,34 +397,41 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
   const showSingleResult = checks.length === 1 && !isBusy && !isIdle;
   const showMultiResult = checks.length > 1;
   const checkButtonLabel = isBusy ? t.checkBtnBusy : isIdle ? t.checkBtnIdle : t.checkBtnAgain;
+  // While a check is running we haven't reached a verdict yet, so the theme
+  // stays neutral rather than flashing to the previous result's color.
+  const visualStatus = isBusy ? 'idle' : overallStatus;
+  const theme = themeFor(visualStatus);
 
   return (
-    <View style={[styles.container, Platform.OS === 'web' ? styles.webFill : null]}>
+    <LinearGradient
+      colors={theme.bg}
+      style={[styles.container, Platform.OS === 'web' ? styles.webFill : null]}
+    >
       <SafeAreaView style={[styles.safe, Platform.OS === 'web' ? styles.webFill : null]}>
         <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
           <TouchableOpacity
-            style={styles.menuBtn}
+            style={[styles.menuBtn, { backgroundColor: theme.cornerBg, borderColor: theme.cornerBorder }]}
             onPress={() => setMenuVisible(true)}
             accessibilityLabel={t.menuButtonA11y}
           >
-            <MenuIcon size={18} color={COLORS.textSecondary} />
+            <MenuIcon size={18} color={theme.cornerIcon} />
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={styles.langBtn}
+            style={[styles.langBtn, { backgroundColor: theme.cornerBg, borderColor: theme.cornerBorder }]}
             onPress={() => setLangPickerVisible(true)}
             accessibilityLabel={t.languageButtonA11y}
           >
-            <GlobeIcon size={18} color={COLORS.textSecondary} />
+            <GlobeIcon size={18} color={theme.cornerIcon} />
           </TouchableOpacity>
 
-          <Image source={LOGO_SOURCE} style={styles.logoImage} />
-          <Text style={styles.appName}>{t.appName}</Text>
-          <Text style={styles.tagline}>{t.tagline}</Text>
+          <LogoBadge status={visualStatus} theme={theme} />
+          <Text style={[styles.appName, { color: theme.titleColor }]}>{t.appName}</Text>
+          <Text style={[styles.tagline, { color: theme.taglineColor }]}>{t.tagline}</Text>
 
           <View style={styles.inputRow}>
             <View style={styles.inputIcon}>
-              <LinkLogoIcon size={18} color={COLORS.accent} />
+              <LinkLogoIcon size={18} color={theme.inputIcon} />
             </View>
             <TextInput
               style={[styles.input, { textAlign: rtl ? 'right' : 'left' }]}
@@ -379,7 +459,7 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
             activeOpacity={0.85}
           >
             <LinearGradient
-              colors={isBusy ? [COLORS.busy, COLORS.busy] : [COLORS.accent, COLORS.accentDark]}
+              colors={isBusy ? [COLORS.busy, COLORS.busy] : theme.buttonGradient}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 1 }}
               style={[styles.checkBtnInner, { flexDirection: rtl ? 'row-reverse' : 'row' }]}
@@ -430,9 +510,9 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
             </>
           )}
 
-          <Text style={styles.footer}>{t.footer}</Text>
+          <Text style={[styles.footer, { color: theme.taglineColor }]}>{t.footer}</Text>
           <TouchableOpacity onPress={() => setTermsVisible(true)}>
-            <Text style={styles.termsLink}>{t.termsFooterLink}</Text>
+            <Text style={[styles.termsLink, { color: theme.titleColor }]}>{t.termsFooterLink}</Text>
           </TouchableOpacity>
         </ScrollView>
 
@@ -571,7 +651,7 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
           </Pressable>
         </Modal>
       </SafeAreaView>
-    </View>
+    </LinearGradient>
   );
 }
 
@@ -650,12 +730,20 @@ const styles = StyleSheet.create({
   langName: { flex: 1, fontSize: 15, color: COLORS.text },
   langNameActive: { fontWeight: '700', color: COLORS.accent },
   langCheck: { fontSize: 15, color: COLORS.accent, marginLeft: 6 },
-  logoImage: {
+  logoBox: {
     width: 76, height: 76, borderRadius: 20,
     marginTop: 8,
-    shadowColor: '#28378C', shadowOpacity: 0.18, shadowRadius: 20, shadowOffset: { width: 0, height: 6 },
+    alignItems: 'center', justifyContent: 'center',
+    shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 20, shadowOffset: { width: 0, height: 6 },
     elevation: 6,
   },
+  logoBadgeCircle: {
+    position: 'absolute', bottom: -3, right: -3,
+    width: 26, height: 26, borderRadius: 13,
+    borderWidth: 3, borderColor: '#fff',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  logoBadgeQuestionText: { fontSize: 13, fontWeight: '800', color: '#fff' },
   appName: { marginTop: 14, fontSize: 27, fontWeight: '800', letterSpacing: -0.5, color: COLORS.text },
   tagline: { marginTop: 4, fontSize: 14, color: COLORS.textSecondary },
   inputRow: {
