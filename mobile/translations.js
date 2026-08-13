@@ -50,7 +50,7 @@ export const STRINGS = {
     chipFast: 'מהיר',
     chipAdvanced: 'חיפוש מתקדם',
     connectionError: 'לא הצלחנו להתחבר לשרת הבדיקה. בדקו את החיבור לאינטרנט ונסו שוב.',
-    safeTitle: 'הקישור בטוח',
+    safeTitle: 'לא זוהו איומים ידועים',
     safeSubtitle: (domain) => `לא זוהו סימני הונאה או דיוג עבור ${domain}`,
     dangerTitle: 'הקישור עלול להיות מזיק',
     dangerSubtitle: 'זוהו סימני אזהרה האופייניים לדיוג או הונאה',
