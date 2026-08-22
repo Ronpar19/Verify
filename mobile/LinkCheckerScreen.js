@@ -66,6 +66,7 @@ const APP_SECRET = process.env.EXPO_PUBLIC_APP_SECRET || '';
 // points at) and the standalone Android APK it serves.
 const WEB_APP_URL = 'https://verifyweb-phi.vercel.app';
 const APK_URL = `${WEB_APP_URL}/link-checker.apk`;
+export const PRIVACY_URL = `${WEB_APP_URL}/privacy`;
 
 export const COLORS = {
   bg: '#EEF0F6',
@@ -166,6 +167,14 @@ function hostnameOf(url) {
 
 // Small in-card status glyph — plain check / X / "?", not one of the big
 // logo SVGs (those are reserved for LogoBadge below).
+function statusA11yLabel(status, t) {
+  if (status === 'safe') return t.safeTitle;
+  if (status === 'danger') return t.dangerTitle;
+  if (status === 'unknown') return t.unknownTitle;
+  if (status === 'loading') return t.a11yCheckingLink;
+  return t.a11yPendingLink;
+}
+
 function StatusIcon({ status, size = 24 }) {
   if (status === 'safe') return <CheckIcon size={size} color={COLORS.success} />;
   if (status === 'danger') return <CloseIcon size={size} color={COLORS.danger} />;
@@ -191,23 +200,38 @@ function LogoBadge({ status }) {
 
 function ResultCard({ status, url, details, t, rtl, onReset }) {
   const palette = paletteFor(status);
-  const title = status === 'safe' ? t.safeTitle : status === 'danger' ? t.dangerTitle : t.unknownTitle;
+  const title = statusA11yLabel(status, t);
   const subtitle =
     details || (status === 'safe' ? t.safeSubtitle(hostnameOf(url)) : status === 'danger' ? t.dangerSubtitle : t.unknownSubtitle);
 
   return (
     <View style={[styles.resultCard, { borderColor: palette.border }]}>
-      <View style={[styles.resultIconCircle, { backgroundColor: palette.bg }]}>
+      <View
+        style={[styles.resultIconCircle, { backgroundColor: palette.bg }]}
+        accessible
+        accessibilityRole="image"
+        accessibilityLabel={title}
+      >
         <StatusIcon status={status} size={26} />
       </View>
-      <Text style={styles.resultTitle}>{title}</Text>
-      <Text style={styles.resultSubtitle}>{subtitle}</Text>
+      <Text style={styles.resultTitle} accessibilityLiveRegion="polite">{title}</Text>
+      <Text style={styles.resultSubtitle} accessibilityLiveRegion="polite">{subtitle}</Text>
       <View style={[styles.resultActions, { flexDirection: rtl ? 'row-reverse' : 'row' }]}>
-        <TouchableOpacity style={styles.resultBtnSecondary} onPress={onReset}>
+        <TouchableOpacity
+          style={styles.resultBtnSecondary}
+          onPress={onReset}
+          accessibilityRole="button"
+          accessibilityLabel={t.checkAnotherBtn}
+        >
           <Text style={styles.resultBtnSecondaryText}>{t.checkAnotherBtn}</Text>
         </TouchableOpacity>
         {status === 'danger' && (
-          <TouchableOpacity style={[styles.resultBtnPrimary, { backgroundColor: COLORS.danger }]} onPress={onReset}>
+          <TouchableOpacity
+            style={[styles.resultBtnPrimary, { backgroundColor: COLORS.danger }]}
+            onPress={onReset}
+            accessibilityRole="button"
+            accessibilityLabel={t.blockBtn}
+          >
             <Text style={styles.resultBtnPrimaryText}>{t.blockBtn}</Text>
           </TouchableOpacity>
         )}
@@ -226,12 +250,17 @@ function MultiResultCard({ checks, overallStatus, t, rtl, onReset }) {
 
   return (
     <View style={[styles.resultCard, { borderColor: palette.border }]}>
-      <Text style={styles.multiCaption}>{t.multiFoundCount(checks.length)}</Text>
-      {!!caption && <Text style={styles.resultSubtitle}>{caption}</Text>}
+      <Text style={styles.multiCaption} accessibilityLiveRegion="polite">{t.multiFoundCount(checks.length)}</Text>
+      {!!caption && <Text style={styles.resultSubtitle} accessibilityLiveRegion="polite">{caption}</Text>}
       <View style={styles.linksList}>
         {checks.map((c, idx) => (
           <View key={`${idx}-${c.url}`} style={[styles.linkRow, { flexDirection: rtl ? 'row-reverse' : 'row' }]}>
-            <View style={styles.linkRowIconCircle}>
+            <View
+              style={styles.linkRowIconCircle}
+              accessible
+              accessibilityRole="image"
+              accessibilityLabel={statusA11yLabel(c.status, t)}
+            >
               {c.status === 'loading' ? (
                 <ActivityIndicator size="small" color={COLORS.accent} />
               ) : (
@@ -251,7 +280,12 @@ function MultiResultCard({ checks, overallStatus, t, rtl, onReset }) {
           </View>
         ))}
       </View>
-      <TouchableOpacity style={[styles.resultBtnSecondary, styles.resultBtnFull]} onPress={onReset}>
+      <TouchableOpacity
+        style={[styles.resultBtnSecondary, styles.resultBtnFull]}
+        onPress={onReset}
+        accessibilityRole="button"
+        accessibilityLabel={t.checkAnotherBtn}
+      >
         <Text style={styles.resultBtnSecondaryText}>{t.checkAnotherBtn}</Text>
       </TouchableOpacity>
     </View>
@@ -378,6 +412,10 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
     Linking.openURL(APK_URL);
   }, []);
 
+  const handleOpenPrivacy = useCallback(() => {
+    Linking.openURL(PRIVACY_URL);
+  }, []);
+
   const handleIosContinue = useCallback(() => {
     setIosHelpVisible(false);
     Linking.openURL(WEB_APP_URL);
@@ -403,7 +441,9 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
           <TouchableOpacity
             style={[styles.menuBtn, { backgroundColor: theme.cornerBg, borderColor: theme.cornerBorder }]}
             onPress={() => setMenuVisible(true)}
+            accessibilityRole="button"
             accessibilityLabel={t.menuButtonA11y}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           >
             <MenuIcon size={18} color={theme.cornerIcon} />
           </TouchableOpacity>
@@ -411,7 +451,9 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
           <TouchableOpacity
             style={[styles.langBtn, { backgroundColor: theme.cornerBg, borderColor: theme.cornerBorder }]}
             onPress={() => setLangPickerVisible(true)}
+            accessibilityRole="button"
             accessibilityLabel={t.languageButtonA11y}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           >
             <GlobeIcon size={18} color={theme.cornerIcon} />
           </TouchableOpacity>
@@ -435,9 +477,16 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
               autoCorrect={false}
               keyboardType="url"
               editable={!isBusy}
+              accessibilityLabel={t.linkInputA11y}
             />
             {!!link && (
-              <TouchableOpacity style={styles.clearBtn} onPress={handleClear} accessibilityLabel={t.clearA11y}>
+              <TouchableOpacity
+                style={styles.clearBtn}
+                onPress={handleClear}
+                accessibilityRole="button"
+                accessibilityLabel={t.clearA11y}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
                 <Text style={styles.clearBtnText}>×</Text>
               </TouchableOpacity>
             )}
@@ -448,6 +497,8 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
             onPress={handleCheckPress}
             disabled={isBusy || !link.trim()}
             activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel={checkButtonLabel}
           >
             <LinearGradient
               colors={isBusy ? [COLORS.busy, COLORS.busy] : theme.buttonGradient}
@@ -488,6 +539,8 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
               <TouchableOpacity
                 style={[styles.pasteBtn, { flexDirection: rtl ? 'row-reverse' : 'row' }]}
                 onPress={handleAutoPaste}
+                accessibilityRole="button"
+                accessibilityLabel={t.autoPasteA11y}
               >
                 <ClipboardIcon size={14} color={COLORS.accent} />
                 <Text style={styles.pasteBtnText}>{t.autoPasteBtn}</Text>
@@ -502,9 +555,23 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
           )}
 
           <Text style={[styles.footer, { color: theme.taglineColor }]}>{t.footer}</Text>
-          <TouchableOpacity onPress={() => setTermsVisible(true)}>
-            <Text style={[styles.termsLink, { color: theme.titleColor }]}>{t.termsFooterLink}</Text>
-          </TouchableOpacity>
+          <View style={[styles.legalLinksRow, { flexDirection: rtl ? 'row-reverse' : 'row' }]}>
+            <TouchableOpacity
+              onPress={() => setTermsVisible(true)}
+              accessibilityRole="button"
+              accessibilityLabel={t.termsFooterLink}
+            >
+              <Text style={[styles.termsLink, { color: theme.titleColor }]}>{t.termsFooterLink}</Text>
+            </TouchableOpacity>
+            <Text style={[styles.termsLink, { color: theme.titleColor }]}>·</Text>
+            <TouchableOpacity
+              onPress={handleOpenPrivacy}
+              accessibilityRole="button"
+              accessibilityLabel={t.privacyPolicyLink}
+            >
+              <Text style={[styles.termsLink, { color: theme.titleColor }]}>{t.privacyPolicyLink}</Text>
+            </TouchableOpacity>
+          </View>
         </ScrollView>
 
         <Modal visible={menuVisible} transparent onRequestClose={() => setMenuVisible(false)}>
@@ -512,7 +579,13 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
             <View style={styles.drawerPanel}>
               <View style={[styles.drawerHeader, { flexDirection: rtl ? 'row-reverse' : 'row' }]}>
                 <Text style={styles.drawerTitle}>{t.downloadTitle}</Text>
-                <TouchableOpacity onPress={() => setMenuVisible(false)} style={styles.drawerClose}>
+                <TouchableOpacity
+                  onPress={() => setMenuVisible(false)}
+                  style={styles.drawerClose}
+                  accessibilityRole="button"
+                  accessibilityLabel={t.closeA11y}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
                   <Text style={styles.drawerCloseText}>×</Text>
                 </TouchableOpacity>
               </View>
@@ -523,6 +596,8 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
                   setMenuVisible(false);
                   setIosHelpVisible(true);
                 }}
+                accessibilityRole="button"
+                accessibilityLabel={t.iosDownloadBtn}
               >
                 <View style={styles.drawerRowIcon}>
                   <AppleIcon size={20} color={COLORS.text} />
@@ -536,11 +611,28 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
                   setMenuVisible(false);
                   handleAndroidDownload();
                 }}
+                accessibilityRole="button"
+                accessibilityLabel={t.androidDownloadBtn}
               >
                 <View style={styles.drawerRowIcon}>
                   <AndroidIcon size={20} color={COLORS.text} />
                 </View>
                 <Text style={styles.drawerRowText}>{t.androidDownloadBtn}</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.drawerRow, { flexDirection: rtl ? 'row-reverse' : 'row' }]}
+                onPress={() => {
+                  setMenuVisible(false);
+                  handleOpenPrivacy();
+                }}
+                accessibilityRole="button"
+                accessibilityLabel={t.privacyPolicyLink}
+              >
+                <View style={styles.drawerRowIcon}>
+                  <ShieldIcon size={20} color={COLORS.text} />
+                </View>
+                <Text style={styles.drawerRowText}>{t.privacyPolicyLink}</Text>
               </TouchableOpacity>
             </View>
             <Pressable style={styles.drawerBackdrop} onPress={() => setMenuVisible(false)} />
@@ -560,6 +652,9 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
                   key={l.code}
                   style={styles.langRow}
                   onPress={() => handleSelectLanguage(l.code)}
+                  accessibilityRole="button"
+                  accessibilityLabel={l.name}
+                  accessibilityState={{ selected: l.code === lang }}
                 >
                   <Text style={styles.langFlag}>{l.flag}</Text>
                   <Text style={[styles.langName, l.code === lang && styles.langNameActive]}>
@@ -589,12 +684,19 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
                 </View>
               ))}
               <View style={[styles.helpActions, { flexDirection: rtl ? 'row-reverse' : 'row' }]}>
-                <TouchableOpacity style={styles.resultBtnSecondary} onPress={() => setIosHelpVisible(false)}>
+                <TouchableOpacity
+                  style={styles.resultBtnSecondary}
+                  onPress={() => setIosHelpVisible(false)}
+                  accessibilityRole="button"
+                  accessibilityLabel={t.iosHelpCancelBtn}
+                >
                   <Text style={styles.resultBtnSecondaryText}>{t.iosHelpCancelBtn}</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.resultBtnPrimary, { backgroundColor: COLORS.accent }]}
                   onPress={handleIosContinue}
+                  accessibilityRole="button"
+                  accessibilityLabel={t.iosHelpContinueBtn}
                 >
                   <Text style={styles.resultBtnPrimaryText}>{t.iosHelpContinueBtn}</Text>
                 </TouchableOpacity>
@@ -608,7 +710,13 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
             <Pressable style={styles.termsCard} onPress={() => {}}>
               <View style={[styles.termsCardHeader, { flexDirection: rtl ? 'row-reverse' : 'row' }]}>
                 <Text style={styles.termsCardTitle}>{t.termsTitle}</Text>
-                <TouchableOpacity onPress={() => setTermsVisible(false)} style={styles.drawerClose}>
+                <TouchableOpacity
+                  onPress={() => setTermsVisible(false)}
+                  style={styles.drawerClose}
+                  accessibilityRole="button"
+                  accessibilityLabel={t.closeA11y}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
                   <Text style={styles.drawerCloseText}>×</Text>
                 </TouchableOpacity>
               </View>
@@ -635,6 +743,8 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
               <TouchableOpacity
                 style={[styles.resultBtnSecondary, styles.resultBtnFull]}
                 onPress={() => setTermsVisible(false)}
+                accessibilityRole="button"
+                accessibilityLabel={t.termsCloseBtn}
               >
                 <Text style={styles.resultBtnSecondaryText}>{t.termsCloseBtn}</Text>
               </TouchableOpacity>
@@ -830,8 +940,11 @@ const styles = StyleSheet.create({
   footer: {
     marginTop: 18, color: COLORS.textSecondary, fontSize: 11, textAlign: 'center', paddingHorizontal: 8,
   },
+  legalLinksRow: {
+    marginTop: 8, alignItems: 'center', justifyContent: 'center', gap: 8,
+  },
   termsLink: {
-    marginTop: 8, color: COLORS.accent, fontSize: 12, fontWeight: '600', textAlign: 'center',
+    color: COLORS.accent, fontSize: 12, fontWeight: '600', textAlign: 'center',
   },
   termsCard: {
     position: 'absolute', top: '8%', bottom: '8%', left: 20, right: 20,

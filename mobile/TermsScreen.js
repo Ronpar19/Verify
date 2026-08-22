@@ -9,12 +9,12 @@
 // "terms of use" footer link so users can re-read the terms later.
 
 import React, { useCallback, useState } from 'react';
-import { SafeAreaView, View, Text, ScrollView, Pressable, TouchableOpacity, StyleSheet, Platform } from 'react-native';
+import { SafeAreaView, View, Text, ScrollView, Pressable, TouchableOpacity, StyleSheet, Platform, Linking } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { STRINGS, isRTL, getDeviceDefaultLanguage } from './translations';
 import { getTermsBody, TERMS_KEY, TERMS_UPDATED_DATE } from './terms';
 import { CheckIcon } from './icons';
-import { COLORS } from './LinkCheckerScreen';
+import { COLORS, PRIVACY_URL } from './LinkCheckerScreen';
 import * as Localization from 'expo-localization';
 
 function Checkbox({ checked, onToggle }) {
@@ -83,6 +83,14 @@ export default function TermsScreen({ onAccept }) {
           </TouchableOpacity>
 
           <TouchableOpacity
+            onPress={() => Linking.openURL(PRIVACY_URL)}
+            accessibilityRole="button"
+            accessibilityLabel={t.privacyPolicyLink}
+          >
+            <Text style={[styles.privacyLink, { textAlign: rtl ? 'right' : 'left' }]}>{t.privacyPolicyLink}</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
             style={[styles.continueBtn, !checked && styles.continueBtnDisabled]}
             onPress={handleAccept}
             disabled={!checked}
@@ -118,6 +126,7 @@ const styles = StyleSheet.create({
   },
   checkboxChecked: { backgroundColor: COLORS.accent, borderColor: COLORS.accent },
   checkboxLabel: { flex: 1, fontSize: 14, color: COLORS.text, fontWeight: '600' },
+  privacyLink: { marginTop: 10, color: COLORS.accent, fontSize: 12, fontWeight: '600' },
   continueBtn: {
     marginTop: 14, height: 50, borderRadius: 14, backgroundColor: COLORS.accent,
     alignItems: 'center', justifyContent: 'center',
