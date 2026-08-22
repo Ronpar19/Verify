@@ -473,7 +473,7 @@ export default async function handler(req, res) {
 
   if (heuristic.verdict === 'safe') {
     // Both signals agree.
-    return sendVerdict(req, res, 'safe', webRiskResult.details + m.bothSafeSuffix + ' [[DIAG finalUrl=' + finalUrl + ' heuristic=' + JSON.stringify(heuristic) + ']]');
+    return sendVerdict(req, res, 'safe', webRiskResult.details + m.bothSafeSuffix);
   }
 
   // Web Risk found nothing on its lists yet, but the heuristic caught a
@@ -601,17 +601,8 @@ function translateThreatTypes(types, lang) {
 function safePslParse(hostname) {
   try {
     const parsed = psl.parse(hostname);
-    if (!parsed) {
-      console.error('check-link diag (psl): psl.parse returned falsy for', hostname);
-      return null;
-    }
-    if (parsed.error) {
-      console.error('check-link diag (psl): parse error for', hostname, JSON.stringify(parsed.error));
-      return null;
-    }
-    return parsed;
+    return parsed && !parsed.error ? parsed : null;
   } catch (e) {
-    console.error('check-link diag (psl): threw for', hostname, e && e.stack);
     return null;
   }
 }
@@ -880,9 +871,7 @@ export function heuristicAnalysis(rawUrl, lang) {
     const parsedPsl = safePslParse(hostname);
     const registrableDomain = (parsedPsl && parsedPsl.domain) || hostname;
 
-    console.error('check-link diag (typosquat input):', hostname, 'parsedPsl=', JSON.stringify(parsedPsl));
     const typosquat = parsedPsl ? detectTyposquat(parsedPsl.sld) : null;
-    console.error('check-link diag (typosquat result):', JSON.stringify(typosquat));
     if (typosquat) {
       score += typosquat.distance === 0 ? 5 : typosquat.distance === 1 ? 4 : 3;
       reasons.push(r.typosquat(typosquat.brand));
