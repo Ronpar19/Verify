@@ -39,6 +39,36 @@ const RATE_LIMIT_WINDOW = '1 h';
 const SUPPORTED_LANGS = ['he', 'en', 'ru', 'fr', 'ar'];
 const DEFAULT_LANG = 'he';
 
+// ---------- CORS origin allowlist ----------
+//
+// Only the deployed PWA needs a browser-level CORS allowance — the mobile
+// app (Expo Go / installed native/EAS build) calls this directly with no
+// browser involved, so CORS never applies to it regardless of this list.
+// An Origin that matches neither pattern (or a request with no Origin
+// header at all, e.g. a server-to-server call or curl) simply gets no
+// Access-Control-Allow-Origin header — safe default, not an error.
+//
+// Deliberately NOT gated on NODE_ENV: mobile/.env points the web build's
+// EXPO_PUBLIC_API_URL at this *deployed* backend even during local
+// `expo start --web` (there's no local backend in that workflow), and
+// Vercel sets NODE_ENV=production for every deployment of this function,
+// Preview included — so an env-based check would silently block the local
+// web dev origin (and Preview builds of the PWA) in the one place it
+// actually runs. Matching on the origin string itself sidesteps that.
+const ALLOWED_ORIGIN_PATTERNS = [
+  // The deployed PWA (matches WEB_APP_URL in mobile/LinkCheckerScreen.js)
+  // plus any Vercel Preview Deployment of it (verifyweb-<branch>.vercel.app).
+  /^https:\/\/verifyweb(-[a-z0-9-]+)?\.vercel\.app$/i,
+  // Local web dev (`expo start --web`), whatever port it lands on.
+  /^http:\/\/localhost(:\d+)?$/i,
+];
+
+function corsOriginFor(req) {
+  const origin = req.headers && req.headers.origin;
+  if (!origin) return null;
+  return ALLOWED_ORIGIN_PATTERNS.some((re) => re.test(origin)) ? origin : null;
+}
+
 function resolveLang(raw) {
   return SUPPORTED_LANGS.includes(raw) ? raw : DEFAULT_LANG;
 }
@@ -321,10 +351,9 @@ export default async function handler(req, res) {
   // The web/PWA version, though, runs inside an actual browser on its own
   // origin (e.g. verifyweb-*.vercel.app calling verifyapp-*.vercel.app) —
   // browsers block that cross-origin call by default unless the server
-  // explicitly allows it here. The endpoint is already public/unauthenticated
-  // by design (see README "Security notes"), so allowing any origin doesn't
-  // change its risk profile.
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  // explicitly allows it here. See corsOriginFor() above for the allowlist.
+  const corsOrigin = corsOriginFor(req);
+  if (corsOrigin) res.setHeader('Access-Control-Allow-Origin', corsOrigin);
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-app-secret');
 

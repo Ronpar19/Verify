@@ -214,14 +214,31 @@ async function run() {
     check('OPTIONS preflight -> ended without a JSON body', res._ended === true && res._json === null, res);
   }
 
-  // --- 17. A normal POST response carries the CORS header a browser needs
-  // to accept the response (the mobile app ignores this header entirely,
-  // it's browser-only enforcement) ---
+  // --- 17. CORS: only an allowlisted (or localhost) Origin gets echoed back
+  // in Access-Control-Allow-Origin -- this is browser-only enforcement, the
+  // mobile app ignores the header entirely and isn't affected either way ---
   {
     global.fetch = noRedirectFetch(async () => ({ ok: true, json: async () => ({}) }));
-    const res = mockRes();
+
+    let res = mockRes();
+    await handler({ method: 'POST', headers: { origin: 'https://verifyweb-phi.vercel.app' }, body: { link: 'https://www.google.com' } }, res);
+    check('CORS: allowed origin is echoed back', res._headers['Access-Control-Allow-Origin'] === 'https://verifyweb-phi.vercel.app', res);
+
+    res = mockRes();
+    await handler({ method: 'POST', headers: { origin: 'https://verifyweb-preview-abc123.vercel.app' }, body: { link: 'https://www.google.com' } }, res);
+    check('CORS: a Vercel preview deployment of the PWA is also allowed', res._headers['Access-Control-Allow-Origin'] === 'https://verifyweb-preview-abc123.vercel.app', res);
+
+    res = mockRes();
+    await handler({ method: 'POST', headers: { origin: 'http://localhost:8081' }, body: { link: 'https://www.google.com' } }, res);
+    check('CORS: localhost (local web dev) is always allowed', res._headers['Access-Control-Allow-Origin'] === 'http://localhost:8081', res);
+
+    res = mockRes();
+    await handler({ method: 'POST', headers: { origin: 'https://evil.example.com' }, body: { link: 'https://www.google.com' } }, res);
+    check('CORS: an unrecognized origin gets no header', res._headers['Access-Control-Allow-Origin'] === undefined, res);
+
+    res = mockRes();
     await handler({ method: 'POST', body: { link: 'https://www.google.com' } }, res);
-    check('CORS header present on a normal response', res._headers['Access-Control-Allow-Origin'] === '*', res);
+    check('CORS: no Origin header (native app / curl) gets no header', res._headers['Access-Control-Allow-Origin'] === undefined, res);
   }
 
   // --- 18. Shared secret configured + missing/wrong header -> 401, JSON body (not a raw framework error) ---
