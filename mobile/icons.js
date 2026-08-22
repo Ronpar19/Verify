@@ -5,16 +5,31 @@
 // no icon-font dependency.
 
 import React from 'react';
-import Svg, { Path, Circle, Rect, Line } from 'react-native-svg';
+import Svg, { Path, Circle, Rect, Line, G } from 'react-native-svg';
 
-// Two overlapping rotated rounded rectangles — the Verify app logo (chain
-// link). Reused at large size for the hero icon and small size as the
-// input field's leading icon.
+// Open chain-link glyph — the Verify app logo. Reused at large size for the
+// hero icon and small size as the input field's leading icon. Same shape in
+// every status theme; only the `color` prop changes.
 export function LinkLogoIcon({ size = 24, color = '#3F5AE0' }) {
   return (
-    <Svg width={size} height={size} viewBox="0 0 30 30" fill="none">
-      <Rect x="4" y="12" width="14" height="8" rx="4" transform="rotate(-45 4 12)" stroke={color} strokeWidth="2.6" fill="none" />
-      <Rect x="12" y="10" width="14" height="8" rx="4" transform="rotate(-45 12 10)" stroke={color} strokeWidth="2.6" fill="none" />
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <G transform="rotate(-45 12 12)">
+        <Path
+          d="M9 17H7A5 5 0 0 1 7 7h2"
+          stroke={color}
+          strokeWidth="2.2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <Path
+          d="M15 7h2a5 5 0 1 1 0 10h-2"
+          stroke={color}
+          strokeWidth="2.2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <Line x1="8" y1="12" x2="16" y2="12" stroke={color} strokeWidth="2.2" strokeLinecap="round" />
+      </G>
     </Svg>
   );
 }

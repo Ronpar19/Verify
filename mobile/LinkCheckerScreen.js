@@ -30,11 +30,13 @@ import {
   Platform,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import { SvgXml } from 'react-native-svg';
 import * as Clipboard from 'expo-clipboard';
 import * as Localization from 'expo-localization';
 import { LANGUAGES, STRINGS, isRTL, getDeviceDefaultLanguage } from './translations';
 import { extractUrls } from './extractUrls';
 import { getTermsBody, TERMS_UPDATED_DATE } from './terms';
+import { statusIconXml, statusLogoXml, STATUS_LOGO_ASPECT } from './statusIcons';
 import {
   LinkLogoIcon,
   GlobeIcon,
@@ -45,7 +47,6 @@ import {
   ClipboardIcon,
   CheckIcon,
   CloseIcon,
-  SmileyIcon,
   ShieldIcon,
   BoltIcon,
   SearchAdvancedIcon,
@@ -93,8 +94,6 @@ export const COLORS = {
 const STATUS_THEMES = {
   idle: {
     bg: [COLORS.bg, COLORS.bg],
-    logoBg: COLORS.accent,
-    badgeBg: COLORS.accent,
     titleColor: COLORS.text,
     taglineColor: COLORS.textSecondary,
     cornerBg: COLORS.surface,
@@ -105,8 +104,6 @@ const STATUS_THEMES = {
   },
   safe: {
     bg: ['#EAF6EC', '#DCEEDF'],
-    logoBg: '#1E4B32',
-    badgeBg: COLORS.success,
     titleColor: '#173F29',
     taglineColor: '#3E6B4F',
     cornerBg: 'rgba(255,255,255,0.6)',
@@ -117,8 +114,6 @@ const STATUS_THEMES = {
   },
   danger: {
     bg: ['#7A2020', '#B33636'],
-    logoBg: '#5C1717',
-    badgeBg: '#E5484D',
     titleColor: '#FFFFFF',
     taglineColor: 'rgba(255,255,255,0.85)',
     cornerBg: 'rgba(255,255,255,0.18)',
@@ -129,8 +124,6 @@ const STATUS_THEMES = {
   },
   unknown: {
     bg: ['#FBF2D9', '#F7E7BE'],
-    logoBg: '#C9971C',
-    badgeBg: COLORS.unknown,
     titleColor: '#5C3D08',
     taglineColor: '#8A6A2E',
     cornerBg: 'rgba(255,255,255,0.6)',
@@ -171,6 +164,8 @@ function hostnameOf(url) {
   }
 }
 
+// Small in-card status glyph — plain check / X / "?", not one of the big
+// logo SVGs (those are reserved for LogoBadge below).
 function StatusIcon({ status, size = 24 }) {
   if (status === 'safe') return <CheckIcon size={size} color={COLORS.success} />;
   if (status === 'danger') return <CloseIcon size={size} color={COLORS.danger} />;
@@ -180,20 +175,16 @@ function StatusIcon({ status, size = 24 }) {
   return <LinkLogoIcon size={size * 0.7} color={COLORS.textSecondary} />;
 }
 
-// The circular app logo in the header. The small badge in its bottom-right
-// corner mirrors the current verdict — a plain smiley until a check has
-// run, then a checkmark/X/question-mark matching the result.
-function LogoBadge({ status, theme }) {
-  const badgeIcon =
-    status === 'safe' ? <CheckIcon size={13} color="#fff" />
-    : status === 'danger' ? <CloseIcon size={13} color="#fff" />
-    : status === 'unknown' ? <Text style={styles.logoBadgeQuestionText}>?</Text>
-    : <SmileyIcon size={14} color="#fff" />;
-
+// The big app logo in the header, next to "Verify" — one of the four
+// link_*_4k_white_outline.svg files, swapped whole (not just recolored) to
+// match the current check result. 'idle'/'loading' fall back to the blue
+// tile via statusIconXml's default branch. statusLogoXml clips out the
+// source files' own cream page-background so the tile sits frameless on
+// the app's own background.
+function LogoBadge({ status }) {
   return (
-    <View style={[styles.logoBox, { backgroundColor: theme.logoBg }]}>
-      <LinkLogoIcon size={34} color="#fff" />
-      <View style={[styles.logoBadgeCircle, { backgroundColor: theme.badgeBg }]}>{badgeIcon}</View>
+    <View style={styles.logoBox}>
+      <SvgXml xml={statusLogoXml(status)} width={76} height={76 * STATUS_LOGO_ASPECT} />
     </View>
   );
 }
@@ -425,7 +416,7 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
             <GlobeIcon size={18} color={theme.cornerIcon} />
           </TouchableOpacity>
 
-          <LogoBadge status={visualStatus} theme={theme} />
+          <LogoBadge status={visualStatus} />
           <Text style={[styles.appName, { color: theme.titleColor }]}>{t.appName}</Text>
           <Text style={[styles.tagline, { color: theme.taglineColor }]}>{t.tagline}</Text>
 
@@ -731,19 +722,10 @@ const styles = StyleSheet.create({
   langNameActive: { fontWeight: '700', color: COLORS.accent },
   langCheck: { fontSize: 15, color: COLORS.accent, marginLeft: 6 },
   logoBox: {
-    width: 76, height: 76, borderRadius: 20,
+    width: 76, height: 76,
     marginTop: 8,
     alignItems: 'center', justifyContent: 'center',
-    shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 20, shadowOffset: { width: 0, height: 6 },
-    elevation: 6,
   },
-  logoBadgeCircle: {
-    position: 'absolute', bottom: -3, right: -3,
-    width: 26, height: 26, borderRadius: 13,
-    borderWidth: 3, borderColor: '#fff',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  logoBadgeQuestionText: { fontSize: 13, fontWeight: '800', color: '#fff' },
   appName: { marginTop: 14, fontSize: 27, fontWeight: '800', letterSpacing: -0.5, color: COLORS.text },
   tagline: { marginTop: 4, fontSize: 14, color: COLORS.textSecondary },
   inputRow: {
