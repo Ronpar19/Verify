@@ -1,4 +1,4 @@
-import handler, { __setRatelimiterForTests } from './api/check-link.js';
+import handler, { __setRatelimiterForTests, heuristicAnalysis } from './api/check-link.js';
 import statsHandler from './api/stats.js';
 import { __setRedisForTests } from './api/_lib/redis.js';
 
@@ -367,6 +367,132 @@ async function run() {
     const res = mockRes();
     await statsHandler({ method: 'GET', headers: {}, query: { secret: 'anything' } }, res);
     check('STATS_SECRET unset -> still 401, never open by default', res._status === 401, res);
+  }
+
+  // ============================================================
+  // Heuristic v2 signals -- direct unit tests against
+  // heuristicAnalysis() itself (no fetch mocking needed: these are
+  // pure structural checks on the URL string, same pattern as
+  // mobile/test-extract-urls.mjs tests extractUrls() directly).
+  // ============================================================
+
+  // --- 29. Legitimate domains: none of the new signals should fire ---
+  {
+    const legitimate = [
+      'https://google.com',
+      'https://www.google.com',
+      'https://login.paypal.com',
+      'https://www.amazon.com',
+      'https://gov.il',
+    ];
+    for (const url of legitimate) {
+      const h = heuristicAnalysis(url, 'he');
+      check(`legitimate: ${url} -> safe`, h.verdict === 'safe', h);
+    }
+  }
+
+  // --- 30. Typosquatting: close edit-distance / leetspeak matches against
+  // KNOWN_SAFE_DOMAINS get flagged, and specifically name the real brand ---
+  {
+    const typosquats = [
+      ['https://paypa1.com', 'paypal.com'],
+      ['https://paypall.com', 'paypal.com'],
+      ['https://g00gle.com', 'google.com'],
+      ['https://micr0soft.com', 'microsoft.com'],
+    ];
+    for (const [url, brand] of typosquats) {
+      const h = heuristicAnalysis(url, 'he');
+      check(`typosquat: ${url} -> not safe`, h.verdict !== 'safe', h);
+      check(`typosquat: ${url} -> reason names ${brand}`, h.reasons.some((r) => r.includes(brand)), h);
+      check(`typosquat: ${url} -> stays below highConfidence`, h.highConfidence === false, h);
+    }
+  }
+
+  // --- 31. Subdomain deception: an exact known domain embedded as a fake
+  // subdomain of someone else's domain is flagged; a REAL subdomain of the
+  // real domain is not; a brand keyword loose in a subdomain still falls
+  // through to the existing (unchanged) brand-keyword check ---
+  {
+    let h = heuristicAnalysis('https://paypal.com.evil.com', 'he');
+    check('subdomain decoy: paypal.com.evil.com -> not safe', h.verdict !== 'safe', h);
+    check('subdomain decoy: reason names paypal.com', h.reasons.some((r) => r.includes('paypal.com')), h);
+
+    h = heuristicAnalysis('https://login.paypal.com', 'he');
+    check('real subdomain: login.paypal.com -> safe, not a decoy', h.verdict === 'safe', h);
+
+    h = heuristicAnalysis('https://paypal.security.example.com', 'he');
+    check('brand keyword in a subdomain of an unrelated domain -> not safe', h.verdict !== 'safe', h);
+  }
+
+  // --- 32. Unicode homoglyphs: a single confusable character swapped into
+  // an otherwise-Latin brand name is flagged; a fully non-Latin domain
+  // (no script mixing) is not touched by this signal ---
+  {
+    const cyrillicA = 'а'; // U+0430 CYRILLIC SMALL LETTER A, not ASCII "a"
+    let h = heuristicAnalysis(`https://${cyrillicA}pple.com`, 'he');
+    check('homoglyph: Cyrillic а + "pple.com" -> not safe', h.verdict !== 'safe', h);
+    check('homoglyph: reason mentions foreign-alphabet characters', h.reasons.some((r) => r.includes('אלפבית זר')), h);
+
+    const greekOmicron = 'ο'; // U+03BF GREEK SMALL LETTER OMICRON
+    h = heuristicAnalysis(`https://g${greekOmicron}ogle.com`, 'he');
+    check('homoglyph: Greek omicron in "google.com" -> not safe', h.verdict !== 'safe', h);
+    check('homoglyph (2nd example): reason mentions foreign-alphabet characters', h.reasons.some((r) => r.includes('אלפבית זר')), h);
+
+    // A domain that's genuinely, entirely written in another script (e.g. a
+    // real Hebrew business name) has nothing Latin to "mix" with, so this
+    // signal must stay silent -- flagging it would be exactly the kind of
+    // false positive this feature is required not to introduce.
+    h = heuristicAnalysis('https://דוגמה.ישראל', 'he');
+    check('non-Latin domain with no script mixing -> homoglyph signal silent', !h.reasons.some((r) => r.includes('אלפבית זר')), h);
+  }
+
+  // --- 33. Encoding obfuscation: a brand name spelled out entirely via
+  // percent-encoding, a double-encoded sequence, and an encoded delimiter
+  // in the path all get flagged; ordinary encoding in a query string
+  // (an email address, an embedded redirect URL) does not ---
+  {
+    let h = heuristicAnalysis('https://evil.com/%70%61%79%70%61%6C', 'he'); // spells "paypal"
+    check('encoding: letters spelled via percent-encoding -> not safe', h.verdict !== 'safe', h);
+    check('encoding: reason present', h.reasons.some((r) => r.includes('קידוד')), h);
+
+    h = heuristicAnalysis('https://evil.com/x?r=%2540', 'he'); // %25 + "40" -> double-encoded %40
+    check('encoding: double-encoded sequence -> not safe', h.verdict !== 'safe', h);
+
+    h = heuristicAnalysis('https://evil.com/path%2Fsegment%40hidden', 'he'); // encoded / and @ in the path
+    check('encoding: encoded delimiter in path -> not safe', h.verdict !== 'safe', h);
+
+    h = heuristicAnalysis('https://shop.example.com/redirect?to=https%3A%2F%2Fexample.com%2Fcart&email=user%40example.com', 'he');
+    check('encoding: ordinary query-string encoding (email, embedded URL) -> encoding signal stays silent', !h.reasons.some((r) => r.includes('קידוד')), h);
+  }
+
+  // --- 34. URL complexity: a very long URL with many path segments and
+  // query parameters is flagged as a weak signal; a normal URL is not ---
+  {
+    const longPath = '/' + Array.from({ length: 12 }, (_, i) => `segment${i}`).join('/');
+    const manyParams = Array.from({ length: 15 }, (_, i) => `p${i}=value${i}`).join('&');
+    const complexUrl = `https://example.com${longPath}?${manyParams}&` + 'x'.repeat(200);
+    let h = heuristicAnalysis(complexUrl, 'he');
+    check('complexity: very long URL with many segments/params -> not safe', h.verdict !== 'safe', h);
+    check('complexity: reason present', h.reasons.some((r) => r.includes('מורכב')), h);
+
+    h = heuristicAnalysis('https://example.com/products/item?id=42', 'he');
+    check('complexity: an ordinary URL stays unflagged by this signal', !h.reasons.some((r) => r.includes('מורכב')), h);
+  }
+
+  // --- 35. Existing high-confidence cases still set highConfidence exactly
+  // as before -- the new signals must never touch this ---
+  {
+    const stillHighConfidence = [
+      'http://127.0.0.1/login',
+      'http://192.168.1.50/verify',
+      'http://10.0.0.5/account',
+      'http://203.0.113.9/secure',
+      'https://google.com@evil.com',
+    ];
+    for (const url of stillHighConfidence) {
+      const h = heuristicAnalysis(url, 'he');
+      check(`existing high-confidence case intact: ${url}`, h.highConfidence === true, h);
+    }
   }
 
   console.log('\n' + pass + ' passed, ' + fail + ' failed');

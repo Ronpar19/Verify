@@ -8,6 +8,8 @@
     },
     "dependencies": {
         "@upstash/ratelimit": "^2.0.8",
-        "@upstash/redis": "^1.38.2"
+        "@upstash/redis": "^1.38.2",
+        "psl": "^1.15.0",
+        "punycode": "^2.3.1"
     }
 }
