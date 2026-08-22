@@ -473,7 +473,7 @@ export default async function handler(req, res) {
 
   if (heuristic.verdict === 'safe') {
     // Both signals agree.
-    return sendVerdict(req, res, 'safe', webRiskResult.details + m.bothSafeSuffix);
+    return sendVerdict(req, res, 'safe', webRiskResult.details + m.bothSafeSuffix + ' [[DIAG:' + JSON.stringify(heuristic) + ']]');
   }
 
   // Web Risk found nothing on its lists yet, but the heuristic caught a
