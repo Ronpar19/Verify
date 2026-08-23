@@ -27,6 +27,7 @@ import psl from 'psl';
 import punycode from 'punycode/punycode.js';
 import { getRedis } from './_lib/redis.js';
 import { recordCheck } from './_lib/stats.js';
+import { infrastructureAnalysis } from './_lib/infrastructure.js';
 
 const THREAT_TYPES = ['MALWARE', 'SOCIAL_ENGINEERING', 'UNWANTED_SOFTWARE'];
 const MAX_REDIRECTS = 5;
@@ -444,35 +445,79 @@ export default async function handler(req, res) {
   }
 
   const apiKey = process.env.GOOGLE_API_KEY;
-  let webRiskResult = null;
-  if (apiKey) {
-    try {
-      webRiskResult = await checkWebRisk(finalUrl, apiKey, lang);
-    } catch (err) {
-      console.error('check-link error (webrisk):', err);
-      webRiskResult = null; // fall through to heuristic-only below
-    }
-  } else {
-    console.error('GOOGLE_API_KEY is not set in the environment');
-  }
+  const webRiskPromise = apiKey
+    ? checkWebRisk(finalUrl, apiKey, lang).catch((err) => {
+        console.error('check-link error (webrisk):', err);
+        return null; // fall through to heuristic-only below
+      })
+    : Promise.resolve(null);
+  if (!apiKey) console.error('GOOGLE_API_KEY is not set in the environment');
+
+  // Started concurrently with Web Risk -- both depend only on finalUrl and
+  // have no dependency on each other. If Web Risk comes back "danger"
+  // below, this promise is deliberately left unawaited (fire-and-forget):
+  // a confirmed Web Risk "danger" already wins outright today regardless
+  // of any other signal, so no infrastructure result could change that
+  // outcome, and waiting for it would only add latency for nothing. On
+  // Vercel serverless, once that early response is sent (no `waitUntil`
+  // used to extend the instance's lifetime), this promise may or may not
+  // get to finish before the instance freezes/recycles -- that's fine;
+  // there's currently no Redis schema or consumer for a result that would
+  // arrive after the response is already gone. (`waitUntil` from
+  // `@vercel/functions` is confirmed to work on Vercel's Node.js
+  // Serverless Functions, not just Edge -- it was evaluated and
+  // deliberately not wired in for this same reason: nothing to do with
+  // the result yet.)
+  //
+  // The `.catch()` here is a deliberate defensive backstop, not evidence
+  // that infrastructureAnalysis() is known to reject today (it isn't --
+  // every internal DNS/RDAP call is already individually guarded). But on
+  // this fire-and-forget path nothing else will ever observe this promise
+  // if it does throw, and on Node 24 an unhandled rejection crashes the
+  // process outright, not just logs a warning (confirmed directly). A
+  // future change to this file that adds an unguarded signal computation
+  // should degrade gracefully here, not take down the whole request --
+  // same reasoning, and the same pattern, as webRiskPromise's own
+  // `.catch()` just above.
+  const infraPromise = infrastructureAnalysis(finalUrl, lang).catch((err) => {
+    console.error('check-link error (infra):', err);
+    return { score: 0, reasons: [], available: false };
+  });
+
+  const webRiskResult = await webRiskPromise;
 
   // Web Risk found a confirmed match — that's a strong, reliable signal.
-  // Trust it outright; no need for a second opinion.
+  // Trust it outright; no need for a second opinion from either the
+  // heuristic or the infrastructure layer.
   if (webRiskResult && webRiskResult.status === 'danger') {
     return sendVerdict(req, res, webRiskResult.status, webRiskResult.details);
   }
 
+  // By the time we reach here, infraPromise has already been running for
+  // as long as webRiskPromise took (they started together), so this await
+  // typically adds little to no extra wall-clock time on top of Web Risk's
+  // own latency.
   const heuristic = heuristicAnalysis(finalUrl, lang);
+  const infra = await infraPromise;
+
+  // Combine into ONE score/reasons system, not a second verdict structure
+  // (per design) -- the infrastructure layer's score is added to the
+  // heuristic's own score and the verdict is re-derived using the exact
+  // same thresholds heuristicAnalysis() itself uses internally.
+  const combinedScore = heuristic.score + infra.score;
+  const combinedReasons = [...heuristic.reasons, ...infra.reasons];
+  const combinedVerdict = combinedScore >= 5 ? 'unsafe' : (combinedScore >= 2 ? 'uncertain' : 'safe');
 
   if (!webRiskResult) {
     // Web Risk unavailable (bad/missing key, network error, quota) — the
-    // heuristic is the only signal we have, so use its full verdict range.
+    // heuristic + infrastructure signals are all we have, so use the full
+    // combined verdict range.
     const statusMap = { safe: 'safe', uncertain: 'uncertain', unsafe: 'danger' };
-    return sendVerdict(req, res, statusMap[heuristic.verdict], m.heuristicOnlyPrefix + heuristic.reasons.join('; '));
+    return sendVerdict(req, res, statusMap[combinedVerdict], m.heuristicOnlyPrefix + combinedReasons.join('; '));
   }
 
-  if (heuristic.verdict === 'safe') {
-    // Both signals agree.
+  if (combinedVerdict === 'safe') {
+    // All signals agree.
     return sendVerdict(req, res, 'safe', webRiskResult.details + m.bothSafeSuffix);
   }
 
@@ -483,16 +528,20 @@ export default async function handler(req, res) {
   // Google to catch up. Weaker, more error-prone combinations (plain http
   // + a cheap TLD + a word like "login") do NOT get this treatment and
   // stay "uncertain" below, since those alone are common on legitimate
-  // small/older sites too.
+  // small/older sites too. The infrastructure layer NEVER sets this —
+  // its independent DNS resolve can't guarantee it saw the same IP the
+  // actual connection used (see api/_lib/infrastructure.js), so a private/
+  // internal IP found only there stays a strong score contribution, never
+  // an automatic "danger".
   if (heuristic.highConfidence) {
-    return sendVerdict(req, res, 'danger', m.heuristicDangerPrefix + heuristic.reasons.join('; '));
+    return sendVerdict(req, res, 'danger', m.heuristicDangerPrefix + combinedReasons.join('; '));
   }
 
-  // Everything else: Web Risk found nothing on its lists, and the URL's
-  // own structure looks suspicious but isn't a smoking gun — don't hand
-  // out false confidence, but don't cry "danger" on a legitimate site
-  // either.
-  return sendVerdict(req, res, 'uncertain', m.uncertainPrefix + heuristic.reasons.join('; '));
+  // Everything else: Web Risk found nothing on its lists, and neither the
+  // URL's own structure nor its infrastructure is a smoking gun — don't
+  // hand out false confidence, but don't cry "danger" on a legitimate
+  // site either.
+  return sendVerdict(req, res, 'uncertain', m.uncertainPrefix + combinedReasons.join('; '));
 }
 
 function normalizeUrl(raw) {
@@ -929,5 +978,12 @@ export function heuristicAnalysis(rawUrl, lang) {
 
   const verdict = score >= 5 ? 'unsafe' : (score >= 2 ? 'uncertain' : 'safe');
   if (!reasons.length) reasons.push(r.noneFound);
-  return { verdict, reasons, highConfidence };
+  // `score` is exposed (in addition to the pre-computed `verdict`) purely
+  // so the handler can add the infrastructure layer's own score to it and
+  // re-derive a verdict from the combined total using these exact same
+  // thresholds — see infrastructureAnalysis() in api/_lib/infrastructure.js
+  // and its caller below. Existing callers that only use `verdict` /
+  // `reasons` / `highConfidence` (including every existing test) are
+  // completely unaffected by this addition.
+  return { verdict, reasons, highConfidence, score };
 }

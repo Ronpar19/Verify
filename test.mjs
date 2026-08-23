@@ -1,6 +1,7 @@
 import handler, { __setRatelimiterForTests, heuristicAnalysis } from './api/check-link.js';
 import statsHandler from './api/stats.js';
 import { __setRedisForTests } from './api/_lib/redis.js';
+import { infrastructureAnalysis, __setDnsForTests, __setRdapFetchForTests } from './api/_lib/infrastructure.js';
 
 let pass = 0, fail = 0;
 function check(name, cond, extra) {
@@ -15,6 +16,31 @@ function mockRes() {
   res.setHeader = (k, v) => { res._headers[k] = v; };
   res.end = () => { res._ended = true; return res; };
   return res;
+}
+
+// Default fake DNS resolver: every lookup fails, exactly like a domain
+// with no real infrastructure behind it would -- infrastructure.js already
+// treats any lookup failure as "no data" (empty array), so this keeps
+// every existing test's infra contribution at score=0/reasons=[], with NO
+// live network calls, consistent with this project's "mocked fetch, no
+// live API calls" testing philosophy. Individual infra-focused tests below
+// override specific fields via makeFakeDns({...}).
+function makeFakeDns(overrides) {
+  const reject = () => Promise.reject(new Error('ENOTFOUND (fake)'));
+  return {
+    resolve4: overrides?.a ? async () => overrides.a : reject,
+    resolve6: overrides?.aaaa ? async () => overrides.aaaa : reject,
+    resolveCname: overrides?.cname ? async () => overrides.cname : reject,
+    resolveMx: overrides?.mx ? async () => overrides.mx : reject,
+    resolveNs: overrides?.ns ? async () => overrides.ns : reject,
+  };
+}
+
+// Default fake RDAP fetch: always fails (no live network), matching how a
+// real "RDAP unsupported/unreachable for this TLD" case degrades -- see
+// domainAgeDays() in infrastructure.js, which treats this as "no data".
+function makeFakeRdapFetch(responder) {
+  return responder || (async () => { throw new Error('fake RDAP unreachable'); });
 }
 
 function noRedirectFetch(webRiskResponder) {
@@ -57,6 +83,11 @@ function makeFakeRedis() {
 
 async function run() {
   process.env.GOOGLE_API_KEY = 'test-key-123';
+  // No live DNS/RDAP calls for the existing test suite -- see makeFakeDns
+  // above. Infra-specific tests further down install their own overrides
+  // and restore this default afterwards.
+  __setDnsForTests(makeFakeDns());
+  __setRdapFetchForTests(makeFakeRdapFetch());
 
   // --- 1. Web Risk says danger -> danger, no heuristic needed ---
   {
@@ -493,6 +524,182 @@ async function run() {
       const h = heuristicAnalysis(url, 'he');
       check(`existing high-confidence case intact: ${url}`, h.highConfidence === true, h);
     }
+  }
+
+  // ============================================================
+  // Infrastructure / DNS layer -- direct unit tests against
+  // infrastructureAnalysis() itself, using fake DNS/RDAP so
+  // everything stays fast and network-free.
+  // ============================================================
+
+  // --- 36. Legitimate domain: no DNS-based signals, clean result ---
+  {
+    __setDnsForTests(makeFakeDns({ a: ['93.184.216.34'], ns: ['a.iana-servers.net', 'b.iana-servers.net'] }));
+    const infra = await infrastructureAnalysis('https://example.com', 'he');
+    check('infra: legitimate domain -> score 0', infra.score === 0, infra);
+    check('infra: legitimate domain -> no reasons', infra.reasons.length === 0, infra);
+    check('infra: legitimate domain -> available', infra.available === true, infra);
+  }
+
+  // --- 36b. Explicitly-requested legitimate set: google.com / amazon.com /
+  // gov.il -- clean DNS, and RDAP unreachable (the real situation for
+  // gov.il, simulated here for all three for consistency) -> no signals ---
+  {
+    __setDnsForTests(makeFakeDns({ a: ['142.250.1.1'], ns: ['ns1.google.com', 'ns2.google.com'] }));
+    __setRdapFetchForTests(makeFakeRdapFetch()); // unreachable/no data
+    for (const domain of ['https://google.com', 'https://amazon.com', 'https://gov.il']) {
+      const infra = await infrastructureAnalysis(domain, 'he');
+      check(`infra: legitimate domain ${domain} -> score 0`, infra.score === 0, infra);
+    }
+  }
+
+  // --- 37. Domain that fails to resolve at all: must not crash, must not
+  // be treated as suspicious -- DNS failure is not itself a phishing signal ---
+  {
+    __setDnsForTests(makeFakeDns()); // every lookup rejects, like NXDOMAIN
+    const infra = await infrastructureAnalysis('https://this-domain-does-not-exist-xyz.example', 'he');
+    check('infra: NXDOMAIN-style failure -> score 0, no crash', infra.score === 0, infra);
+    check('infra: NXDOMAIN-style failure -> no reasons', infra.reasons.length === 0, infra);
+  }
+
+  // --- 38. A record resolves to a private/internal IPv4 address: strong
+  // score signal, but NEVER highConfidence (independent-resolve TOCTOU) ---
+  {
+    const privateIPv4Cases = ['127.0.0.1', '10.1.2.3', '192.168.1.1', '169.254.169.254'];
+    for (const ip of privateIPv4Cases) {
+      __setDnsForTests(makeFakeDns({ a: [ip], ns: ['ns1.example.com'] }));
+      const infra = await infrastructureAnalysis('https://evil-domain.example', 'he');
+      check(`infra: A record -> ${ip} -> flagged`, infra.score > 0, infra);
+      check(`infra: A record -> ${ip} -> reason present`, infra.reasons.some((r) => r.includes('פרטית')), infra);
+      check(`infra: A record -> ${ip} -> NEVER highConfidence (no such field)`, infra.highConfidence === undefined, infra);
+    }
+  }
+
+  // --- 39. IPv6 private/special cases, incl. IPv4-mapped IPv6 ---
+  {
+    const privateIPv6Cases = ['::1', 'fc00::1', 'fe80::1', '::ffff:127.0.0.1'];
+    for (const ip of privateIPv6Cases) {
+      __setDnsForTests(makeFakeDns({ aaaa: [ip], ns: ['ns1.example.com'] }));
+      const infra = await infrastructureAnalysis('https://evil-domain.example', 'he');
+      check(`infra: AAAA record -> ${ip} -> flagged`, infra.score > 0, infra);
+    }
+  }
+
+  // --- 40. A normal public IP must NOT be flagged ---
+  {
+    __setDnsForTests(makeFakeDns({ a: ['8.8.8.8'], ns: ['ns1.example.com'] }));
+    const infra = await infrastructureAnalysis('https://evil-domain.example', 'he');
+    check('infra: public IP -> not flagged', infra.score === 0, infra);
+  }
+
+  // --- 40b. RFC 5737 TEST-NET ranges (documentation-only, never a real
+  // public destination) -- explicit coverage for all three ranges, not
+  // just an incidental hit in an unrelated test ---
+  {
+    const testNetCases = ['192.0.2.1', '198.51.100.1', '203.0.113.1'];
+    for (const ip of testNetCases) {
+      __setDnsForTests(makeFakeDns({ a: [ip], ns: ['ns1.example.com'] }));
+      const infra = await infrastructureAnalysis('https://evil-domain.example', 'he');
+      check(`infra: TEST-NET ${ip} -> flagged as non-public`, infra.score > 0, infra);
+    }
+  }
+
+  // --- 41. Zero NS records is NOT scored (dropped after live testing showed
+  // a real resolver can fail NS queries for entirely legitimate domains,
+  // e.g. google.com itself -- see the note in infrastructure.js). NS data
+  // is still captured for context/future use when it IS available. ---
+  {
+    __setDnsForTests(makeFakeDns({ a: ['93.184.216.34'], ns: [] }));
+    let infra = await infrastructureAnalysis('https://evil-domain.example', 'he');
+    check('infra: no NS records -> not scored', infra.score === 0, infra);
+
+    __setDnsForTests(makeFakeDns({ a: ['93.184.216.34'], ns: ['ns1.example.com', 'ns2.example.com'] }));
+    infra = await infrastructureAnalysis('https://evil-domain.example', 'he');
+    check('infra: NS records are captured in the result when present', infra.ns.length === 2, infra);
+  }
+
+  // --- 42. Domain age via RDAP: very new (<7d), moderately new (<30d),
+  // and old (no signal) -- and the exact registrable domain (not the full
+  // hostname) is what gets queried ---
+  {
+    __setDnsForTests(makeFakeDns());
+    let queriedUrl = null;
+    const daysAgo = (n) => new Date(Date.now() - n * 86400000).toISOString();
+
+    __setRdapFetchForTests(async (url) => {
+      queriedUrl = url;
+      return { ok: true, json: async () => ({ events: [{ eventAction: 'registration', eventDate: daysAgo(3) }] }) };
+    });
+    let infra = await infrastructureAnalysis('https://login.newly-registered-example.com', 'he');
+    check('infra: <7 day old domain -> flagged', infra.score > 0, infra);
+    check('infra: RDAP queried the registrable domain, not the full hostname', queriedUrl.includes('newly-registered-example.com') && !queriedUrl.includes('login.'), queriedUrl);
+
+    __setRdapFetchForTests(async () => ({ ok: true, json: async () => ({ events: [{ eventAction: 'registration', eventDate: daysAgo(15) }] }) }));
+    infra = await infrastructureAnalysis('https://somewhat-new-example.com', 'he');
+    check('infra: 15 day old domain -> weak signal', infra.score > 0, infra);
+
+    __setRdapFetchForTests(async () => ({ ok: true, json: async () => ({ events: [{ eventAction: 'registration', eventDate: daysAgo(4000) }] }) }));
+    infra = await infrastructureAnalysis('https://google.com', 'he');
+    check('infra: long-established domain -> no age signal', infra.score === 0, infra);
+
+    __setRdapFetchForTests(makeFakeRdapFetch()); // back to "unreachable/no data" default
+  }
+
+  // --- 43. RDAP unavailable for the domain's TLD (the real .il situation,
+  // simulated here as an HTTP 404 from the bootstrap) -> silent no-op, NOT
+  // treated as suspicious ---
+  {
+    __setDnsForTests(makeFakeDns());
+    __setRdapFetchForTests(async () => ({ ok: false, status: 404 }));
+    const infra = await infrastructureAnalysis('https://gov.il', 'he');
+    check('infra: RDAP 404 (e.g. .il) -> no penalty', infra.score === 0, infra);
+    __setRdapFetchForTests(makeFakeRdapFetch());
+  }
+
+  // --- 44. A DNS lookup that never resolves must not block the layer past
+  // its own timeout/budget ---
+  {
+    const hang = new Promise(() => {}); // never settles
+    __setDnsForTests({
+      resolve4: () => hang, resolve6: () => hang, resolveCname: () => Promise.reject(new Error('x')),
+      resolveMx: () => Promise.reject(new Error('x')), resolveNs: () => Promise.reject(new Error('x')),
+    });
+    const t0 = Date.now();
+    const infra = await infrastructureAnalysis('https://slow-dns-example.com', 'he');
+    const elapsedMs = Date.now() - t0;
+    check('infra: hanging DNS lookup still resolves within budget', elapsedMs < 2500, elapsedMs);
+    check('infra: hanging DNS lookup -> graceful empty result, no crash', infra.score === 0, infra);
+    __setDnsForTests(makeFakeDns());
+  }
+
+  // --- 45. Race pattern, end to end through the full handler: Web Risk
+  // "danger" returns FAST without waiting for a hanging infrastructure
+  // lookup (fire-and-forget, no AbortController complexity needed) ---
+  {
+    const hang = new Promise(() => {});
+    __setDnsForTests({
+      resolve4: () => hang, resolve6: () => hang, resolveCname: () => hang, resolveMx: () => hang, resolveNs: () => hang,
+    });
+    global.fetch = noRedirectFetch(async () => ({ ok: true, json: async () => ({ threat: { threatTypes: ['MALWARE'] } }) }));
+    const res = mockRes();
+    const t0 = Date.now();
+    await handler({ method: 'POST', body: { link: 'https://www.google.com' } }, res);
+    const elapsedMs = Date.now() - t0;
+    check('race pattern: Web Risk danger returns fast, does not wait for hanging infra', elapsedMs < 300, elapsedMs);
+    check('race pattern: status is still danger', res._json.status === 'danger', res._json);
+    __setDnsForTests(makeFakeDns());
+  }
+
+  // --- 46. Race pattern: when Web Risk is NOT "danger" (safe here), the
+  // full handler DOES wait for infrastructure and folds its signal in ---
+  {
+    __setDnsForTests(makeFakeDns({ a: ['192.168.1.1'], ns: ['ns1.example.com'] })); // private IP behind the domain
+    global.fetch = noRedirectFetch(async () => ({ ok: true, json: async () => ({}) })); // Web Risk: nothing found
+    const res = mockRes();
+    await handler({ method: 'POST', body: { link: 'https://looks-clean-but-isnt.example' } }, res);
+    check('race pattern: non-danger path waits for and reflects infra signal', res._json.status !== 'safe', res._json);
+    check('race pattern: still not an automatic "danger" (no highConfidence from infra)', res._json.status !== 'danger', res._json);
+    __setDnsForTests(makeFakeDns());
   }
 
   console.log('\n' + pass + ' passed, ' + fail + ' failed');
