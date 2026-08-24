@@ -65,11 +65,6 @@ Desktop\link-checker-vercel\              <- הבקאנד + שורש
 │       ├── stats.js                      <- ספירת שימוש פרטית (בלי לשמור תוכן קישורים)
 │       └── infrastructure.js             <- שכבת DNS/RDAP (נוספה בשיחה אחרונה)
 ├── test.mjs                               <- 130 טסטים לבקאנד (heuristic + infra + API)
-├── extractUrls.js, translations.js, test-extract-urls.mjs
-│                                          <- ⚠️ עותקים ישנים/לא בשימוש מלפני הפיצול ל-mobile/,
-│                                             translations.js כאן מיושן משמעותית (157 שורות מול
-│                                             345 ב-mobile/translations.js) — מועמדים למחיקה,
-│                                             טרם אושר
 ├── package.json, README.md, vercel.json
 ├── DEPLOYMENT.md                          <- מדריך פריסה מלא צעד-אחר-צעד
 ├── .env.example, .gitignore
@@ -249,10 +244,6 @@ Desktop\link-checker-vercel\              <- הבקאנד + שורש
    כתשתית לכך, אך **טרם עברו עורך דין** — מומלץ לפני הגשה רשמית.
 4. (לא דחוף) פרויקט Vercel מיותר "dist" (`dist-one-dun-68.vercel.app`)
    מתקופת מלכודת ה-`vercel link` — המשתמש בחר להשאיר בינתיים.
-5. (לא דחוף, ממתין לאישור) מועמדים למחיקה: `extractUrls.js`,
-   `translations.js`, `test-extract-urls.mjs` בשורש (עותקים ישנים
-   ולא-בשימוש מלפני הפיצול ל-mobile/), ו-`mobile/LICENSE` (רישיון
-   template של Expo, לא של הפרויקט).
 
 ## החלטות מפתח ולמה
 - **Web Risk API, לא Safe Browsing v4** (מסחרי + לא deprecated).
