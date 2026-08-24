@@ -574,6 +574,13 @@ async function resolveFinalUrl(startUrl) {
   for (let i = 0; i < MAX_REDIRECTS; i++) {
     const hostname = safeHostname(current);
     if (!hostname || isPrivateHost(hostname)) {
+      // The actual SSRF risk this blocks: without this check, a malicious
+      // or compromised link could redirect *our own server's* fetch into
+      // its private network -- e.g. a cloud metadata endpoint
+      // (169.254.169.254) that hands out credentials to anything running
+      // inside the VM, or an internal service with no auth because it
+      // assumed only trusted internal callers could ever reach it. We
+      // refuse to connect before that fetch ever happens, not after.
       const blocked = new Error('Refusing to follow a redirect to a private/internal address');
       blocked.ssrf = true;
       blocked.attemptedUrl = current;
