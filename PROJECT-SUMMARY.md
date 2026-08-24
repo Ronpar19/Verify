@@ -1,268 +1,288 @@
 # סיכום פרויקט: אפליקציית Verify (בדיקת קישורים)
 
-מסמך זה מיועד להידבק/להיטען בתחילת שיחה חדשה עם Claude Code כדי לחדש
-עבודה על הפרויקט בלי לאבד הקשר. הוא מרכז את **כל** מה שנעשה עד כה,
-המצב המדויק של מה פרוס בפועל מול מה שקיים רק מקומית, וצ'קליסט קונקרטי
-להמשך.
+מסמך זה מתעד את מצב הפרויקט — הארכיטקטורה, מה פרוס בפועל, וההחלטות
+המרכזיות מאחורי הקוד הקיים ולמה הן התקבלו. הוא מתעדכן ככל שהפרויקט
+מתפתח, לא נכתב מחדש בכל שיחה.
 
-**Git**: הפרויקט עבר `git init` ויש לו עכשיו ריפו מרוחק ב-GitHub:
-**https://github.com/Ronpar19/Verify** (ענף `main`). זהות ה-commit
-מוגדרת גלובלית במחשב: `user.name=ronpar19`, `user.email=ronpar19@gmail.com`.
+**Git**: ריפו מרוחק ב-GitHub: **https://github.com/Ronpar19/Verify**
+(ענף `main`). זהות ה-commit: `user.name=ronpar19`,
+`user.email=ronpar19@gmail.com`.
 **חשוב**: `.claude/settings.local.json`, `mobile/public/*.apk`,
 `frontend/`, ו-`verify.demo/` נמצאים ב-`.gitignore` בכוונה (הראשון כי
 הוא עלול להכיל טוקנים בשורות ה-allow-list; השאר כי הם עותקים
-ישנים/קובץ בינארי כבד) — **אל תסיר אותם מה-gitignore בלי לבדוק שוב
-לפי אותה השיטה שמתוארת שם** (חיפוש `api[_-]?key|secret|token|password`
-בכל הפרויקט + `git check-ignore -v` על כל קובץ חשוד, לפני כל commit).
+ישנים/קובץ בינארי כבד) — **אל תסיר אותם מה-gitignore בלי לבדוק שוב**
+(חיפוש `api[_-]?key|secret|token|password` בכל הפרויקט + `git
+check-ignore -v` על כל קובץ חשוד, לפני כל commit).
 
 ---
 
 ## מה האפליקציה עושה
-עוזרת למשתמשים לבדוק אם קישור שקיבלו ב-SMS/מייל הוא פישינג/הונאה או
-אמין. מדביקים קישור (או הודעה שלמה, אפילו עם כמה קישורים בתוכה),
-לוחצים "בדוק קישור", ומקבלים תוצאה: ✓ בטוח, ✗ מסוכן, או "לא ניתן לקבוע
-בוודאות". תמיכה מלאה בעברית, אנגלית, רוסית, צרפתית וערבית.
+עוזרת למשתמשים לבדוק אם קישור שקיבלו ב-SMS/מייל/הודעה הוא פישינג/הונאה
+או אמין. מדביקים קישור (או הודעה שלמה עם כמה קישורים בתוכה — כולל
+שיתוף ישיר מ-Messages/WhatsApp דרך Android share-intent), לוחצים "בדוק
+קישור", ומקבלים תוצאה: 🟢 בטוח, 🔴 מסוכן, או 🟡 "לא ניתן לקבוע
+בוודאות". תמיכה מלאה ב-5 שפות (עברית, אנגלית, רוסית, צרפתית, ערבית)
+כולל RTL, ותמיכה בקורא מסך (accessibility roles/labels/live-regions)
+לכל האורך.
 
 ## ארכיטקטורה
+
 ```
-[אפליקציית Expo (React Native + web)] --POST {link, lang}--> [בקאנד ב-Vercel /api/check-link] --> [Google Web Risk API]
+[Expo app: PWA / APK / share-intent] --POST {link, lang}--> [Vercel /api/check-link]
+                                                                     │
+                                                          resolve redirects (SSRF guard)
+                                                                     │
+                                          ┌──────────────────────────┼──────────────────────────┐
+                                          ▼                          ▼                          ▼
+                                   heuristic מבני            Google Web Risk            DNS / RDAP infra
+                              (typosquatting, homoglyphs,   (רץ במקביל לשכבת ה-infra —   (private-IP destination,
+                               encoding, complexity...)      "מסוכן" חוזר מיד, לא          domain age)
+                                          │                   ממתין לתוצאת ה-infra)              │
+                                          └──────────────────────────┬──────────────────────────┘
+                                                                     ▼
+                                                          score/reasons משולבים
+                                                                     ▼
+                                                        safe · uncertain · dangerous
 ```
+
 מפתח ה-API של גוגל יושב **רק** בשרת (משתנה סביבה), אף פעם לא באפליקציה
-עצמה. הבקאנד לא מסתמך רק על Web Risk — יש שכבה שנייה: ניתוח היוריסטי של
-מבנה הקישור (סיומות דומיין חשודות, חיקוי מותג, סימן @, IP גולמי, קיצורי
-קישורים). Web Risk "מסוכן" תמיד קובע; Web Risk "בטוח" מקבל חוות דעת
-שנייה מההיוריסטיקה.
+עצמה. הבקאנד לא מסתמך רק על Web Risk — יש **שלושה** אותות בלתי-תלויים
+שמשולבים לניקוד אחד (לא שלוש תוצאות נפרדות): Web Risk, heuristic מבני
+של הקישור עצמו, ושכבת DNS/infrastructure. Web Risk "מסוכן" תמיד קובע
+מיידית; Web Risk "בטוח" מקבל חוות דעת שנייה (ושלישית) לפני שהוא
+מוחזר למשתמש כפי שהוא.
 
 ---
 
 ## 📁 מבנה הפרויקט בפועל (Windows)
 ```
 Desktop\link-checker-vercel\              <- הבקאנד + שורש
-├── api\check-link.js                     <- Vercel function
-├── test.mjs                               <- 23 טסטים לבקאנד
+├── api\
+│   ├── check-link.js                     <- Vercel function הראשי
+│   ├── stats.js                          <- endpoint פנימי לצפייה בסטטיסטיקות שימוש
+│   └── _lib\
+│       ├── redis.js                      <- לקוח Upstash Redis משותף
+│       ├── stats.js                      <- ספירת שימוש פרטית (בלי לשמור תוכן קישורים)
+│       └── infrastructure.js             <- שכבת DNS/RDAP (נוספה בשיחה אחרונה)
+├── test.mjs                               <- 130 טסטים לבקאנד (heuristic + infra + API)
+├── extractUrls.js, translations.js, test-extract-urls.mjs
+│                                          <- ⚠️ עותקים ישנים/לא בשימוש מלפני הפיצול ל-mobile/,
+│                                             translations.js כאן מיושן משמעותית (157 שורות מול
+│                                             345 ב-mobile/translations.js) — מועמדים למחיקה,
+│                                             טרם אושר
 ├── package.json, README.md, vercel.json
+├── DEPLOYMENT.md                          <- מדריך פריסה מלא צעד-אחר-צעד
 ├── .env.example, .gitignore
 ├── .vercel\project.json                   <- פרויקט Vercel "verify_app" (הבקאנד)
-├── frontend\LinkCheckerScreen.js           <- ⚠️ עותק ישן/לא בשימוש, להתעלם
-├── verify.demo\                            <- ⚠️ ארכיון ישן, לא בשימוש
-├── PROJECT-SUMMARY.md (הקובץ הזה)
+├── frontend\, verify.demo\                <- ⚠️ ארכיונים ישנים, ב-gitignore, לא בשימוש
 └── mobile\                                 <- אפליקציית ה-Expo בפועל ("Verify")
-    ├── App.js
-    ├── LinkCheckerScreen.js                <- המסך הראשי (עבר redesign מלא בשיחה הזו)
-    ├── icons.js                            <- אייקוני SVG (react-native-svg) — נוסף בשיחה הזו
-    ├── translations.js                     <- כל טקסטי הממשק ב-5 שפות
-    ├── extractUrls.js                      <- מזהה קישורים בטקסט מודבק
-    ├── test-extract-urls.mjs               <- 15 טסטים
-    ├── app.json                            <- name: "Verify" (עודכן בשיחה הזו, קודם היה "mobile")
-    ├── package.json, index.js
-    ├── .env                                <- EXPO_PUBLIC_API_URL
-    ├── assets\                             <- אייקוני האפליקציה הנייטיבית (נוצרו מחדש בשיחה הזו!)
-    ├── public\                             <- תבנית ה-web/PWA (index.html, manifest.json, אייקונים, ה-APK)
+    ├── App.js                             <- root component, מנהל מסך תנאי שימוש מול המסך הראשי
+    ├── LinkCheckerScreen.js               <- המסך הראשי
+    ├── TermsScreen.js, terms.js           <- מסך הסכמה חד-פעמי + טקסט התקנון
+    ├── icons.js, statusIcons.js           <- אייקוני SVG (react-native-svg)
+    ├── translations.js                    <- כל טקסטי הממשק, 5 שפות (המקור האמיתי)
+    ├── extractUrls.js, test-extract-urls.mjs  <- מזהה קישורים בטקסט, 15 טסטים
+    ├── app.json, eas.json, index.js, package.json
+    ├── .env                                <- EXPO_PUBLIC_API_URL, EXPO_PUBLIC_APP_SECRET
+    ├── assets\                             <- אייקוני האפליקציה הנייטיבית
+    ├── public\                             <- תבנית ה-web/PWA
+    │   ├── index.html, manifest.json, אייקונים, link-checker.apk
+    │   ├── download\index.html             <- דף נחיתה להורדה (Android + הסבר iOS)
+    │   └── privacy\index.html              <- מדיניות פרטיות ציבורית (נדרש ל-Play Console)
     └── dist\.vercel\project.json           <- פרויקט Vercel "verify_web" (ה-PWA)
 ```
 
 ---
 
-## 🚨 המצב המדויק כרגע — מה פרוס בפועל מול מה שקיים רק מקומית
+## 🚀 מה פרוס בפועל כרגע
+- **בקאנד** (`https://verifyapp-khaki.vercel.app`) — פרוס ותקין, כולל
+  שכבת ה-DNS/infrastructure העדכנית ביותר. נבדק ישירות בפרודקשן
+  (curl) אחרי כל deploy.
+- **PWA** (`https://verifyweb-phi.vercel.app`) — פרוס ותקין, כולל
+  דפי `/download` ו-`/privacy`.
+- **Android APK** — קיים ומעודכן ב-`mobile/public/link-checker.apk`,
+  מוגש דרך ה-PWA. `expo-updates` מוגדר כך שעדכוני JS-בלבד מגיעים
+  אוטומטית דרך `eas update --channel preview` בלי build חדש —
+  **טרם אומת בפועל על מכשיר פיזי** שהצינור הזה עובד קצה-לקצה (זו
+  עדיין הבדיקה החד-פעמית שנשארה פתוחה).
+- **CORS**: מוגבל ל-origin של ה-PWA (+ preview deployments שלו) ול-
+  localhost בלבד, לא פתוח לכל.
+- **Rate limiting, shared-secret auth, usage stats**: פעילים דרך
+  Upstash Redis (fail-open אם לא מוגדר).
 
-- **בקאנד** (`https://verifyapp-khaki.vercel.app`) — פרוס ותקין, **לא
-  נגעתי בו בשיחה הזו**. ה-CORS כבר תוקן (מהשיחה הקודמת).
-- **PWA** (`https://verifyweb-phi.vercel.app`) — ✅ **פרוס מחדש
-  ונבדק** (2026-07-30) — מציג את העיצוב החדש (כותרת "Verify",
-  manifest.json מעודכן, אומת עם `curl`).
-- **Android APK** — ✅ **הושלם** (2026-07-30). שני builds רצו: הראשון
-  (`da88026a`) בלי `expo-updates`, לא בשימוש. **השני (`055b9686`) הוא
-  הנכון** — כולל `expo-updates`, הורד והוחלף בפועל ב-
-  `mobile\public\link-checker.apk` (66MB, אומת עם `curl` שהקובץ החי
-  ב-`verifyweb-phi.vercel.app/link-checker.apk` תואם בגודלו בדיוק).
-  ה-PWA נפרס מחדש אחרי ההחלפה (ראה למטה). לוגי ה-build הנכון:
-  https://expo.dev/accounts/ronpar19/projects/mobile/builds/055b9686-ae5b-42e1-97f2-a940e23393dc
-  **טרם נבדק בפועל על מכשיר**: שה-APK אכן מתקין ופועל, ושעדכון עתידי
-  דרך `eas update` באמת מגיע אליו — כדאי לבדוק בפעם הראשונה שיש שינוי
-  JS-בלבד לשלוח.
-- **שם התצוגה של האפליקציה** — ✅ כבר "Verify" בכל מקום (נבדק
-  ב-`app.json`, אין override נפרד ל-android) — תקף גם בשני ה-builds
-  של היום וגם ב-PWA.
-
-### 🔄 EAS Update הוגדר (2026-07-30) — עדכוני JS יהיו אוטומטיים מה-build הבא
-הותקן `expo-updates` (`~29.0.19`) דרך `eas update:configure --non-interactive`.
-זה שינה:
-- `mobile/app.json`: נוסף `runtimeVersion: {"policy":"appVersion"}` ו-
-  `updates.url: "https://u.expo.dev/00d908b2-81d7-4ccd-97f0-59c2587d9cf8"`.
-- `mobile/eas.json`: לכל build profile יש עכשיו `channel` (הפרופיל
-  שבשימוש בפועל, `preview`, מפורסם ל-channel בשם `"preview"`).
-
-**איך זה עובד מעכשיו** (אחרי שה-build הבא באפליקציה כבר כולל את
-`expo-updates`): לכל שינוי **JS בלבד** (כמו כל מה שעשינו היום — עיצוב,
-טקסטים, לוגיקה) — **אין צורך ב-build חדש בכלל**. מריצים:
-```powershell
-cd mobile
-eas update --channel preview --message "תיאור קצר של השינוי"
-```
-וכל מי שכבר מותקן אצלו האפליקציה יקבל את זה אוטומטית (בפעם הבאה
-שהוא פותח את האפליקציה, בהינתן חיבור לאינטרנט). **build חדש (עם הורדת
-APK ידנית) עדיין נדרש רק** כשמוסיפים ספרייה native חדשה (כמו
-`react-native-svg`/`expo-linear-gradient` שהוספנו קודם בשיחה הזו) או
-משנים משהו ב-`app.json` שדורש קומפילציה native (אייקונים, שם
-האפליקציה וכו').
-
-### ⚠️ מלכודת אמיתית שנתקלנו בה בפריסת ה-PWA — לזכור בכל פריסה עתידית
-`npx expo export -p web` **מוחק ומייצר מחדש** את כל תיקיית `mobile\dist`
-— כולל את `dist\.vercel\project.json` שמקשר אותה לפרויקט הנכון
-(`verify_web`)! אם מריצים `vercel --prod` מיד אחרי export בלי לבדוק,
-ה-CLI **יוצר פרויקט Vercel חדש בטעות** (בשם התיקייה, כלומר "dist")
-במקום לפרוס ל-`verifyweb-phi.vercel.app`. בדיוק זה קרה בשיחה הזו —
-נוצר פרויקט מיותר `dist-one-dun-68.vercel.app` שהמשתמש בחר **להשאיר
-בינתיים** (לא למחוק, לא בשימוש). **הנוהל הנכון לכל פריסה עתידית**:
-```powershell
-cd mobile
-npx expo export -p web
-cd dist
-npx vercel link --project verify_web --yes    # קריטי! לפני vercel --prod
-npx vercel --prod --yes
-```
-
-**המלצה**: לפני שמריצים build/deploy — לבדוק את כל השינויים פעם אחת
-ב-`npx expo start --web` (יש `.claude\launch.json` מוכן עם קונפיגורציה
-בשם `verify-app-web` בדיוק בשביל זה), ורק אז לפרוס.
-
----
-
-## 🎨 מה נעשה בשיחה הזו — Redesign מלא לפי Claude Design
-
-המשתמש ייבא פרויקט מ-`claude.ai/design` (`Verify App.dc.html` +
-`ios-frame.jsx` + `support.js`) עם עיצוב חדש למסך הבית, ומשם התבקש
-redesign מלא לאפליקציה בשתי סבבים:
-
-### סבב 1 — העיצוב הבסיסי החדש
-- **פלטת עיצוב חדשה**: רקע אפור-בהיר קבוע (`#EEF0F6`) וכרטיסי לבן,
-  במקום הרקע הצבעוני המלא הישן שהשתנה לפי תוצאה (idle/safe/danger).
-  הוסר לגמרי מנגנון `Animated`/`animateToColor`.
-- **כפתור "בדוק קישור"** מפורש (מגדלת + gradient כחול, דרך
-  `expo-linear-gradient`) — בנוסף לכפתור ההדבקה האוטומטית הקיים.
-- **כרטיס תוצאה אחיד** לשלושת המצבים (בטוח/מסוכן/לא ודאי) — אייקון
-  בעיגול צבעוני, כותרת, תת-כותרת (מציגה את ה-`details` מהבקאנד אם קיים),
-  וכפתורי פעולה (בדוק שוב / פתח קישור / חסום ואל תמשיך / פתח בכל זאת).
-  גם רשימת "כמה קישורים" עברה עיצוב מחדש באותו סגנון.
-- **כפתור הגלובוס** (בורר שפה) עוצב מחדש כעיגול לבן עם אייקון גלובוס
-  אמיתי (SVG, `icons.js`), נשאר בפינה **הימנית** העליונה.
-- **חלונית "איך מוסיפים למסך הבית"** ל-iOS: לחיצה על כפתור ההורדה ל-iOS
-  פותחת הסבר ב-4 צעדים, וכפתור "המשך לאתר" בסוף שפותח את ה-PWA
-  (`verifyweb-phi.vercel.app`).
-- **כפתור ההורדה לאנדרואיד** מקושר ישירות ל-APK
-  (`https://verifyweb-phi.vercel.app/link-checker.apk`).
-- **תלויות חדשות** ב-`mobile/package.json`: `react-native-svg`,
-  `expo-linear-gradient`.
-- נוספו מפתחות תרגום חדשים (5 שפות) ב-`translations.js`:
-  `appName`, `tagline`, `checkBtnIdle/Busy/Again`, `checkingHint`,
-  `orDivider`, `safeTitle/Subtitle`, `dangerTitle/Subtitle`,
-  `unknownTitle/Subtitle`, `checkAnotherBtn`, `openLinkBtn`, `blockBtn`,
-  `openAnywayBtn`, `iosDownloadBtn`, `androidDownloadBtn`,
-  `iosHelpTitle/Steps/ContinueBtn/CancelBtn` ועוד.
-- שורת ה-footer המקורית **נשמרה כפי שהייתה**: "כלי עזר בלבד ואינו
-  מבטיח דיוק מוחלט — היו זהירים תמיד".
-
-### סבב 2 — תיקונים לפי משוב
-1. **כפתור ההדבקה האוטומטית** צומצם מרוחב-מלא לפילה קומפקטית וממורכזת.
-2. **תפריט צד (☰)** חדש — כפתור המבורגר בפינה **השמאלית** העליונה
-   (מול הגלובוס בימין). לחיצה פותחת פאנל צד עם שתי שורות הורדה
-   (אנדרואיד + iOS), ומחליף את שורת שני הכפתורים שהייתה קבועה בתחתית
-   המסך.
-3. **אייקונים אמיתיים**: נוספו `AppleIcon` ו-`AndroidIcon` (SVG,
-   `icons.js`) לשורות ההורדה בתפריט הצד, ו-`MenuIcon` (☰) לכפתור עצמו.
-4. **שם ולוגו האפליקציה**: התגלה ש-`mobile\assets\icon.png` וכל שאר
-   קבצי האייקון של האפליקציה הנייטיבית היו עדיין ברירת המחדל של Expo
-   (חץ כחול גנרי) — הלוגו האמיתי (שרשרת + וי ירוק, רקע כחול-כהה
-   `#14172E`) היה קיים רק בגרסת ה-PWA (`mobile\public\icon-512.png`
-   וכו'). **נוצרו מחדש כל קבצי האייקון החסרים** מתוך אותו לוגו (עם
-   הסרת רקע/מטה לגרסת ה-adaptive icon השקופה של אנדרואיד + גרסה
-   מונוכרומטית ל-Android 13+):
-   - `assets/icon.png`, `assets/favicon.png`, `assets/splash-icon.png`
-   - `assets/android-icon-background.png` (מילוי צבע אחיד תואם)
-   - `assets/android-icon-foreground.png` (הלוגו עם רקע שקוף)
-   - `assets/android-icon-monochrome.png` (סיליהואטה לבנה)
-   - `assets/logo.png` — עותק בגודל בינוני, בשימוש **במסך הראשי עצמו**
-     (במקום האימוג'י/אייקון הגנרי הקודם).
-   - `app.json`: `expo.name` שונה מ-`"mobile"` ל-**`"Verify"`**, ונוסף
-     בלוק `splash` (רקע כחול-כהה תואם ללוגו).
-   - `mobile/public/index.html` ו-`manifest.json`: הכותרת/שם השתנו
-     מ-"בדיקת קישורים" ל-**"Verify"**, וצבעי ה-theme/background עודכנו
-     לתאום לעיצוב החדש (`#3F5AE0` / `#EEF0F6`).
-5. **הערה חשובה מהמשתמש**: מי שכבר התקין את האפליקציה (APK או PWA) לא
-   יקבל אף אחד מהשינויים האלה אוטומטית — ראה סעיף "המצב המדויק כרגע"
-   למעלה.
-
-### 🐛 באג אמיתי שהתגלה ותוקן: Modal לא נסגר
-תוך כדי בדיקת תפריט הצד בדפדפן, גיליתי שלחיצה על כפתור הסגירה (×) או
-על הרקע **לא סגרה** את הפאנל — למרות שה-state הפנימי (`menuVisible`)
-**כן** התעדכן נכון ל-`false` (אומת עם `console.log` בתוך ה-handler
-ובתוך ה-render). כלומר: React בצד האפליקציה עבד נכון, אבל ה-`<Modal>`
-של `react-native-web` לא הסיר בפועל את התוכן מה-DOM.
-
-**הסיבה**: `animationType="fade"` על ה-`<Modal>` — ב-web, המימוש הזה
-כנראה תקוע במעבר האנימציה וה-DOM נשאר "תקוע" גם אחרי ש-`visible`
-הפך ל-`false`. **התיקון**: הוסר `animationType="fade"` משלושת ה-Modal
-באפליקציה (תפריט הצד, בורר השפה, וחלונית ההסבר ל-iOS) — הם נפתחים
-ונסגרים כרגיל (בלי fade), ואומת שוב ושוב בדפדפן שהכל עובד נכון אחרי
-זה. **אם בעתיד רוצים להחזיר אנימציה** — לבדוק גרסה חדשה יותר של
-`react-native-web`/`react-native`, או להשתמש ב-`Animated` ידני במקום
-ה-`animationType` המובנה.
-
----
-
-## סטטוס — מה כבר עובד
-- **Google Cloud**: פרויקט קיים, Billing מקושר, Web Risk API מופעל,
-  מפתח API מוגבל ל-Web Risk API בלבד.
-- **בקאנד**: 23/23 טסטים עוברים (`node test.mjs` מהשורש). CORS פתור.
-  פרוס וחי ב-`https://verifyapp-khaki.vercel.app`.
-- **extractUrls**: 15/15 טסטים עוברים (`node test-extract-urls.mjs`
-  מתוך `mobile\`).
-- **קוד ה-Expo**: כתוב ומוטמע בפועל, עבר redesign מלא (ראה למעלה),
-  נבדק ב-`npx expo export -p web` (מצליח, ללא שגיאות) וגם ידנית
-  בדפדפן (כולל בדיקה חיה מול הבקאנד האמיתי — תוצאת "מסוכן" עבור
-  `http://testsafebrowsing.appspot.com/s/malware.html` הוצגה נכון).
-- **גרסת SDK**: 54. `react`/`react-dom` 19.1.0, `react-native` 0.81.5.
-  תלויות חדשות: `react-native-svg` 15.12.1, `expo-linear-gradient`
-  ~15.0.8.
-- **חשבון Expo**: `ronpar19` / `ronpar19@gmail.com`.
-- **Git לא מותקן/לא בשימוש** בפרויקט הזה בכלל.
-
-## מה עדיין לא נעשה / הצעד הבא
-1. **בדיקה חד-פעמית שטרם בוצעה**: להתקין את ה-APK החדש (`055b9686`)
-   בפועל על מכשיר/אמולטור אנדרואיד, ואז לשלוח עדכון JS-בלבד לבדיקה:
+### ⚠️ מלכודות אמיתיות שנתקלנו בהן — לזכור בכל פריסה עתידית
+1. **`npx expo export -p web` מוחק ומייצר מחדש** את `mobile\dist`,
+   כולל `dist\.vercel\project.json`. אם מריצים `vercel --prod` מיד
+   אחרי export בלי לקשר מחדש, ה-CLI יוצר בטעות פרויקט Vercel חדש.
+   **הנוהל הנכון**:
    ```powershell
    cd mobile
-   eas update --channel preview --message "בדיקת EAS Update ראשונה"
+   npx expo export -p web
+   cd dist
+   npx vercel link --project verify_web --yes    # קריטי! לפני vercel --prod
+   npx vercel --prod --yes
    ```
-   ולוודא שהוא מגיע למכשיר בפתיחה הבאה של האפליקציה (בהינתן אינטרנט).
-   זו הפעם היחידה שצריך "לוודא שהצינור עובד" — אחרי זה זה שקוף.
-2. Budget Alert בגוגל קלאוד — עדיין לא הוגדר (לא דחוף).
+2. **בדיקת CORS מבוססת `NODE_ENV`** נכשלה בפועל: `mobile/.env` מצביע
+   את ה-web build אל הבקאנד **הפרוס** גם בפיתוח מקומי (`expo start
+   --web`), ו-Vercel קובע `NODE_ENV=production` על כל deployment, כולל
+   Preview. פתרון: allowlist מבוסס origin regex (`localhost` תמיד
+   מותר, `verifyweb(-*)?.vercel.app` מותר), לא תלוי ב-`NODE_ENV`.
+3. **שאילתות NS (nameservers) חייבות לרוץ מול ה-registrable domain**,
+   לא מול ה-hostname המלא — resolver אמיתי החזיר `ENODATA` עבור
+   `www.google.com` (ולפעמים אפילו `google.com`, תלוי resolver) למרות
+   שלגוגל *יש* NS records. בגלל זה "no nameservers" **לא** נשקל בציון
+   בכלל (ראה למטה).
+4. **RDAP לא קיים ל-`.il`** — לא flakiness, עובדה מבנית: `.il` פשוט לא
+   רשום ב-bootstrap הרשמי של IANA (`data.iana.org/rdap/dns.json`).
+   אומת ישירות, לא הונח. domain-age פשוט "אין מידע" עבור `.il`, וזו
+   ההתנהגות הרצויה (לא penalty).
+5. **דומיינים "חשודים" יכולים להיות רשומים באמת** — `paypa1.com`
+   (טעות הקלדה של PayPal) מפנה בפועל ל-`paypal.com` האמיתי (רישום
+   הגנתי, כנראה ע"י PayPal עצמה). אל תניחו שקישור עם שם דומיין
+   "מפוקפק" יתנהג כצפוי ב-בדיקה חיה — לבדוק תמיד עם unit tests
+   ב-mock, ורק לאמת קצה-לקצה עם דומיינים ידועים (google.com, או
+   `http://testsafebrowsing.appspot.com/s/malware.html` — ה-URL
+   הרשמי של גוגל לבדיקות Web Risk, בטוח לשימוש).
+
+---
+
+## 🧠 שכבות הזיהוי — מה יש, ולמה
+
+### 1. Web Risk (הבסיס המקורי)
+קריאה ל-Google Web Risk API מול רשימות איומים ידועות. אמין אבל
+תגובתי בלבד — לא יודע על איום שעדיין לא דווח.
+
+### 2. Heuristic מבני (`heuristicAnalysis()` ב-`api/check-link.js`)
+נבנה במקור עם בדיקות בסיסיות (סיומת TLD חשודה, חיקוי מותג פשוט, סימן
+`@`, IP גולמי, קיצור קישורים), ואז **שודרג משמעותית**:
+- **Typosquatting אמיתי**: Levenshtein distance מול `KNOWN_SAFE_DOMAINS`
+  (לא רשימת מותגים נפרדת), כולל נורמליזציה של leetspeak
+  (`paypa1`→`paypal`, `g00gle`→`google`).
+- **Registrable domain נכון** דרך `psl` (Public Suffix List) במקום
+  `split('.')` נאיבי — מבדיל נכון בין `login.paypal.com` (לגיטימי)
+  ל-`paypal.com.evil.com` (העמדת פנים).
+- **זיהוי Homoglyph**: תווים מ-Unicode script אחר (קירילי/יווני)
+  שנראים כמו אותיות לטיניות (`аpple.com` עם а קירילי), דרך `punycode`.
+- **זיהוי obfuscation ב-encoding**: קידוד percent-encoding מיותר של
+  תווים "unreserved" (למשל שם מותג מקודד אות-אות), double-encoding,
+  ו-delimiters מקודדים (`%2F`/`%40`/`%2E`) בנתיב ה-URL בלבד (לא
+  ב-query string, כדי לא לתפוס false positive על redirect URLs
+  לגיטימיים).
+- **complexity ו-entropy** (חתימות חלשות): אורך URL חריג, hostname
+  "אקראי" (זוהה דרך יחס ספרות/תנועות, לא Shannon entropy גולמי — נבדק
+  אמפירית שאנטרופיה גולמית על מחרוזות קצרות לא אמינה).
+- **Combination bonuses**: כמה אותות חלשים יחד (למשל brand + TLD חשוד
+  + מילות דחיפות) מקבלים בונוס, **אך לעולם לא** מפעילים
+  `highConfidence` — זו הייתה החלטה מפורשת כדי לשמור false positives
+  נמוכים.
+
+### 3. DNS / Infrastructure layer (`api/_lib/infrastructure.js` — החדש ביותר)
+שכבה נפרדת ומודגשת בכוונה מה-heuristic, כי היא מבוססת על **תשתית
+בפועל** של הדומיין, לא על מבנה ה-URL:
+- **Private/internal IP resolution**: resolve עצמאי ל-A/AAAA (דרך
+  `dns.promises`), סיווג IP עם `ipaddr.js` (מטפל נכון ב-IPv4-mapped
+  IPv6, TEST-NET ranges, וכו').
+- **Domain age דרך RDAP ציבורי** (`rdap.org` bootstrap) — לא WHOIS
+  מסחרי.
+- **ASN**: **לא מומש** בכוונה — דורש מאגר IP-to-ASN (MaxMind וכו', לא
+  "local" באמת) או שירות חיצוני. נשאר `placeholder` (`asnLookup()`)
+  לעתיד.
+- **Race pattern עם Web Risk**: שתי הבדיקות מתחילות **במקביל**. אם
+  Web Risk מחזיר "מסוכן" — התשובה חוזרת מיד, בלי להמתין ל-infra (שום
+  infra signal לא יכול לשנות verdict סופי-כבר). אם לא — ה-handler
+  ממתין לתוצאת ה-infra ומשלב אותה לציון אחד.
+- **TOCTOU / DNS rebinding — החלטה קריטית**: ה-resolve של שכבת ה-infra
+  **בלתי-תלוי** בחיבור בפועל שמבצע `resolveFinalUrl()` (שמשתמש
+  ב-`fetch()` ולא חושף IP). לכן IP פרטי שהתגלה **רק** דרך שכבת ה-infra
+  **לעולם לא** מפעיל `highConfidence` — רק ה-SSRF guard הקיים
+  ב-`resolveFinalUrl()` (שעוצר *לפני* חיבור בפועל, ערבות אמיתית) יכול
+  לעשות זאת.
+- **`.catch()` הגנתי**: ה-promise של ה-infra נשאר "תלוי באוויר"
+  (unawaited) כשה-danger path מחזיר תשובה מיידית — נוסף `.catch()`
+  מפורש כדי שרג'קשן עתידי לא יקרוס את ה-process (אומת: Node 24 קורס
+  על unhandled rejection, לא רק מזהיר).
+
+---
+
+## 🎨 עיצוב, נגישות, ופיצ'רי משתמש
+- **Redesign מלא** לפי עיצוב מיובא מ-Claude Design: פלטה אחידה
+  (`#EEF0F6`), כרטיס תוצאה מאוחד לשלושת המצבים, כפתור בדיקה מפורש,
+  תפריט צד עם הורדות ל-iOS/Android, לוגו אמיתי בכל קבצי האייקון
+  (במקום ברירת המחדל הגנרית של Expo). רקע/לוגו/badge משתנים דינמית
+  לפי סטטוס התוצאה.
+- **נגישות**: `accessibilityRole`/`accessibilityLabel` על כל אלמנט
+  אינטראקטיבי, `accessibilityLiveRegion="polite"` על תוצאת הבדיקה כך
+  שקורא מסך מכריז עליה אוטומטית, `hitSlop` על כפתורים קטנים.
+- **מדיניות פרטיות**: דף ציבורי (`/privacy`) בעברית + הודעת fallback
+  לקוראים לא-דוברי-עברית, מקושר מהתפריט ומה-footer.
+- **תנאי שימוש**: מסך הסכמה חד-פעמי חוסם (App.js לא מרנדר את המסך
+  הראשי לפני הסכמה), עם checkbox חובה.
+- **דף `/download`**: נחיתה ציבורית עם כפתורי הורדה (מזהה אוטומטית
+  iOS מול Android ומציג את הרלוונטי קודם).
+- **Android share-intent**: שיתוף טקסט/קישור ישירות מאפליקציות אחרות
+  לתוך Verify (רק ב-build native, לא ב-Expo Go/web).
+- **באג שתוקן**: `animationType="fade"` על `<Modal>` גרם ל-DOM לא
+  להתעדכן ב-react-native-web (ה-state התעדכן נכון, אבל ה-DOM נשאר
+  תקוע). הוסר משלושת ה-Modal-ים באפליקציה; לשקול להחזיר רק אחרי
+  שדרוג גרסת react-native-web.
+
+---
+
+## סטטוס טסטים
+- **בקאנד**: 130/130 (`node test.mjs` מהשורש) — כולל heuristic v2,
+  שכבת ה-infra (עם DNS/RDAP מדומים, בלי קריאות רשת אמיתיות בטסטים),
+  ו-race pattern (מוודא ש-"danger" חוזר מהר בלי להמתין ל-infra תקוע).
+- **extractUrls**: 15/15 (`node test-extract-urls.mjs` מתוך `mobile\`).
+- **גרסת SDK**: Expo 54. תלויות עיקריות ב-mobile:
+  `react-native-svg`, `expo-linear-gradient`, `expo-share-intent`,
+  `@react-native-async-storage/async-storage`, `expo-updates`.
+  תלויות עיקריות בבקאנד: `@upstash/ratelimit`, `@upstash/redis`,
+  `psl`, `punycode`, `ipaddr.js`.
+
+## מה עדיין לא נעשה / הצעד הבא
+1. **בדיקה חד-פעמית שטרם בוצעה**: לוודא בפועל על מכשיר/אמולטור
+   אנדרואיד שה-APK הנוכחי מתקין ופועל, ושעדכון JS-בלבד דרך
+   `eas update --channel preview` באמת מגיע אליו.
+2. Budget Alert בגוגל קלאוד — עדיין לא הוגדר.
 3. חנויות אפליקציות רשמיות (App Store / Google Play) — לא נגענו,
-   נדחה לטובת PWA + APK עצמאי.
-4. (לא דחוף) להחליט אם למחוק את פרויקט ה-Vercel המיותר "dist"
-   (`dist-one-dun-68.vercel.app`) — המשתמש בחר להשאיר אותו בינתיים.
+   נדחה לטובת PWA + APK עצמאי. מדיניות הפרטיות/תנאי השימוש כבר קיימים
+   כתשתית לכך, אך **טרם עברו עורך דין** — מומלץ לפני הגשה רשמית.
+4. (לא דחוף) פרויקט Vercel מיותר "dist" (`dist-one-dun-68.vercel.app`)
+   מתקופת מלכודת ה-`vercel link` — המשתמש בחר להשאיר בינתיים.
+5. (לא דחוף, ממתין לאישור) מועמדים למחיקה: `extractUrls.js`,
+   `translations.js`, `test-extract-urls.mjs` בשורש (עותקים ישנים
+   ולא-בשימוש מלפני הפיצול ל-mobile/), ו-`mobile/LICENSE` (רישיון
+   template של Expo, לא של הפרויקט).
 
 ## החלטות מפתח ולמה
 - **Web Risk API, לא Safe Browsing v4** (מסחרי + לא deprecated).
 - **Vercel Hobby (חינמי) מוגבל לשימוש לא-מסחרי** — לזכור אם עוברים
   למודל רווחים.
 - **רגישות גבוהה לעלויות** — כל המלצה כדאי שתוביל בבדיקת "האם זה
-  חינמי/יש חלופה חינמית".
-- **בלי גרדיאנטים מורכבים מדי / בלי ספריות פונט חיצוניות** (כמו
-  Google Fonts "Rubik" שהופיעה בעיצוב המקורי) — נשמר על הפונט
-  הדיפולטי של המערכת כדי לא לסבך build נייטיבי; שאר הסגנון (צבעים,
-  מרווחים, אייקוני SVG) הועתק במדויק מהעיצוב שיובא מ-Claude Design.
-- **המשתמש עובד ישירות עם Claude Code** על המחשב (לא Cursor, לא
-  העתק-הדבק ידני) — יש הרשאות מלאות לעריכת קבצים, הרצת פקודות,
-  והרצת דפדפן-תצוגה מקדימה (`.claude\launch.json`, קונפיגורציה
-  `verify-app-web`: `cd mobile && npx expo start --web`, פורט 8081).
+  חינמי/יש חלופה חינמית". דוגמה: `psl`/`punycode`/`ipaddr.js` נבחרו
+  על פני `tldts` (כבד פי 4) ועל פני שירותי reputation מסחריים.
+- **`highConfidence` שמור אך ורק למקרים עם ערבות אמיתית** (private
+  IP/raw IP/`@` בזרימה הקיימת, או SSRF guard שעוצר *לפני* חיבור) —
+  שום שילוב של אותות חלשים, ואף לא IP פרטי שהתגלה ב-resolve עצמאי של
+  שכבת ה-infra, לא מפעיל אותו. false positive נמוך > כיסוי אגרסיבי.
+- **בלי גרדיאנטים מורכבים מדי / בלי ספריות פונט חיצוניות** — נשמר על
+  הפונט הדיפולטי של המערכת כדי לא לסבך build נייטיבי.
+- **המשתמש עובד ישירות עם Claude Code** על המחשב — הרשאות מלאות
+  לעריכת קבצים, הרצת פקודות, והרצת דפדפן-תצוגה מקדימה
+  (`.claude\launch.json`, קונפיגורציה `verify-app-web`: `cd mobile &&
+  npx expo start --web`, פורט 8081).
 
 ## רעיונות להמשך (לא דחוף, לפי סדר עדיפות)
-1. Rate limiting על ה-endpoint הציבורי (header עם סוד משותף).
-2. שיתוף ישיר מ-Messages/Mail (Share Extension) — דורש native config
-   plugin.
+1. ASN / hosting infrastructure — רק אם נמצא מקור local קל-משקל, או
+   בהחלטה מודעת להוסיף שירות חיצוני (Team Cymru DNS-based נשקל ונדחה
+   בינתיים — לא IANA-backed, לא ודאי מספיק).
+2. Caching אמיתי לתוצאות DNS/RDAP חוזרות — נדחה במכוון עד ש-Redis
+   כבר "בתמונה" ממילא (rate limiting); in-memory cache על Vercel
+   serverless נותן תועלת שולית מאוד (cold starts בלתי צפויים).
 3. סריקת QR (הונאות "quishing") — מתחבר ישירות ל-`runCheck()` הקיים.
 4. שמירת בחירת שפה בין הפעלות (AsyncStorage).
-5. קאשינג לתוצאות חוזרות + סטטיסטיקות שימוש (דורש DB).
-6. שדרוג `react-native`/`react-native-web` בעתיד ובדיקה אם אפשר
-   להחזיר `animationType="fade"` ל-Modal-ים (ראה סעיף הבאג למעלה).
+5. שדרוג `react-native`/`react-native-web` בעתיד ובדיקה אם אפשר
+   להחזיר `animationType="fade"` ל-Modal-ים.
+6. `waitUntil` (מ-`@vercel/functions`) — אומת שהוא זמין ב-Node.js
+   Serverless Functions של Vercel (לא רק Edge), אך לא נוצל עדיין כי
+   אין עדיין consumer לתוצאת infra שממשיכה ברקע אחרי תשובה מוקדמת.
