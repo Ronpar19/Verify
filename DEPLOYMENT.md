@@ -115,31 +115,63 @@ node test.mjs
 ```
 Worth re-running after any change to `check-link.js`.
 
-## Part C — Wire up the Expo frontend
+## Part C — Set up the Expo frontend
 
-File: `LinkCheckerScreen.js`
+`mobile/` is a complete, already-built Expo app — this section is
+about running *it*, not about integrating a screen into a different
+project. `LinkCheckerScreen.js` is the main screen, but it now pulls
+in several sibling files (`translations.js`, `extractUrls.js`,
+`terms.js`, `icons.js`, `statusIcons.js`) and isn't meant to be lifted
+out on its own.
 
-**1. Install the clipboard package**
+**1. Install dependencies**
 ```bash
-npx expo install expo-clipboard
+cd mobile
+npm install
 ```
+`postinstall` runs `patch-package` automatically (a small, already-
+committed native patch under `mobile/patches/`) — nothing extra to do
+for that.
 
 **2. Point it at your backend**
-Easiest: set an env var so you're not hardcoding URLs per environment.
-Create/edit `.env` at your Expo project root:
+Create `mobile/.env` with the two variables the app actually reads
+(`mobile/LinkCheckerScreen.js`):
 ```
 EXPO_PUBLIC_API_URL=https://your-project.vercel.app/api/check-link
+EXPO_PUBLIC_APP_SECRET=
 ```
-(Expo inlines `EXPO_PUBLIC_*` vars at build time.) If you'd rather not
-deal with env vars, just edit the `API_URL` fallback constant at the
-top of `LinkCheckerScreen.js` directly.
+`EXPO_PUBLIC_API_URL` is required. `EXPO_PUBLIC_APP_SECRET` is
+optional — only set it if you also set `APP_SECRET` on the backend
+(Part B); leave it blank otherwise, both sides treat "unset" as "skip
+the check." Expo inlines `EXPO_PUBLIC_*` vars into the client bundle
+at build time, so this value is extractable by anyone who unpacks the
+app — that's expected here, it's meant to stop casual abuse of a
+bare, discovered endpoint URL, not a determined attacker.
 
-**3. Drop the file into your project** and register it as a screen in
-whatever navigator you're using, e.g. with React Navigation:
-```js
-import LinkCheckerScreen from './LinkCheckerScreen';
-// <Stack.Screen name="LinkChecker" component={LinkCheckerScreen} />
+**3. Run it**
+```bash
+npm start     # interactive target picker
+npm run web   # or android / ios directly
 ```
+These map straight to `expo start`/`expo start --web`/etc. — see
+`mobile/package.json` if you want the exact commands.
+
+**Running the backend locally while you work on the frontend:**
+instead of pointing `EXPO_PUBLIC_API_URL` at a deployed Vercel
+project for every change, run the backend on your own machine with
+the repo's own dev server:
+```bash
+node dev-server.mjs
+```
+from the repo root — no Vercel login or project linking needed (that's
+its whole purpose; see the comment at the top of the file). It serves
+`api/check-link.js` at `http://localhost:3000/api/check-link` and
+already sends the CORS header the Expo web preview needs to reach it
+from a different port. Point `EXPO_PUBLIC_API_URL` there while
+developing, and switch it back to your deployed URL before shipping.
+(`vercel dev` from Part B works too, if you'd rather run the real
+Vercel runtime locally — by this point in the guide you're already
+logged in, so it's mainly a question of convenience.)
 
 **One carry-over note from the web prototype:** there's no API on
 either iOS or Android for a normal app to silently read the last SMS
