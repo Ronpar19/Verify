@@ -2,8 +2,8 @@ node_modules/
 .env
 .env.local
 .vercel
-
-.vercel
+*.log
+.DS_Store
 
 # local Claude Code settings (personal, may contain tokens in allow-list entries)
 .claude/settings.local.json
