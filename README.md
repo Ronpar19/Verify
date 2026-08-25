@@ -9,12 +9,20 @@ concern, not an afterthought.
 
 **[Live Demo (PWA)](https://verifyweb-phi.vercel.app)** · **[Android APK](https://verifyweb-phi.vercel.app/link-checker.apk)**
 
-<!--
-  SCREENSHOT / GIF PLACEHOLDER — replace this comment with a real image
-  or short GIF before publishing, e.g.:
-  ![Verify demo](./docs/demo.gif)
-  Suggested capture: paste link → checking state → red/green/yellow result.
--->
+## Screenshots
+
+Three verdicts, not a single safe/unsafe toggle — the "uncertain"
+state below is what a not-yet-catalogued, suspicious-looking domain
+actually produces, distinct from both a confirmed threat and a clean
+result.
+
+<p align="center">
+  <img src="docs/screenshots/screenshot-home.jpeg" width="230" alt="Home screen, before any check">
+</p>
+
+| 🟢 Safe | 🟡 Uncertain | 🔴 Dangerous |
+|:---:|:---:|:---:|
+| <img src="docs/screenshots/screenshot-safe.jpeg" width="230" alt="Safe verdict"> | <img src="docs/screenshots/screenshot-uncertain.jpeg" width="230" alt="Uncertain verdict"> | <img src="docs/screenshots/screenshot-danger.jpeg" width="230" alt="Dangerous verdict"> |
 
 ## What it checks for, and how results are labeled
 
