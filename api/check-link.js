@@ -25,9 +25,11 @@
 import { Ratelimit } from '@upstash/ratelimit';
 import psl from 'psl';
 import punycode from 'punycode/punycode.js';
+import { waitUntil } from '@vercel/functions';
 import { getRedis } from './_lib/redis.js';
 import { recordCheck } from './_lib/stats.js';
 import { infrastructureAnalysis } from './_lib/infrastructure.js';
+import { getWhitelistEntry } from './_lib/domain-whitelist.js';
 
 const THREAT_TYPES = ['MALWARE', 'SOCIAL_ENGINEERING', 'UNWANTED_SOFTWARE'];
 const MAX_REDIRECTS = 5;
@@ -38,6 +40,32 @@ const FETCH_TIMEOUT_MS = 6000;
 // notes" for the reasoning and the shared-IP (NAT/carrier) caveat.
 const RATE_LIMIT_MAX = 20;
 const RATE_LIMIT_WINDOW = '1 h';
+
+// Fraction of whitelisted-domain requests that get the sampled background
+// Web Risk safety-net check (see backgroundVerifyWhitelistedDomain() below
+// and DOMAIN_WHITELIST.md's "Safety net" section for the full reasoning).
+// Overridable via env for tuning without a code change -- same
+// graceful-config pattern as APP_SECRET/GOOGLE_API_KEY elsewhere in this
+// file. Falls back to the default on anything missing or out of [0, 1] --
+// including an empty string, which must be checked explicitly BEFORE
+// Number(): Number('') is 0 (not NaN), so an unset-but-present env var
+// (exactly what .env.example ships: `WHITELIST_WEBRISK_SAMPLE_RATE=` with
+// no value) would otherwise silently parse as a valid rate of 0 and
+// disable the safety net entirely, instead of falling through to this
+// default as documented.
+const DEFAULT_WHITELIST_WEBRISK_SAMPLE_RATE = 0.1;
+// Exported directly (not a __-prefixed test-only seam) -- a genuinely
+// useful pure function, same reasoning as heuristicAnalysis's own export
+// below: lets tests exercise the parsing/fallback logic itself directly,
+// rather than only inferring it statistically through many sampled calls.
+export function whitelistWebRiskSampleRate() {
+  const raw = process.env.WHITELIST_WEBRISK_SAMPLE_RATE;
+  if (typeof raw !== 'string' || raw.trim() === '') return DEFAULT_WHITELIST_WEBRISK_SAMPLE_RATE;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1
+    ? parsed
+    : DEFAULT_WHITELIST_WEBRISK_SAMPLE_RATE;
+}
 
 const SUPPORTED_LANGS = ['he', 'en', 'ru', 'fr', 'ar'];
 const DEFAULT_LANG = 'he';
@@ -89,6 +117,7 @@ const MESSAGES = {
     },
     dangerWebRisk: (labels) => 'הקישור מזוהה כמסוכן על ידי Google Web Risk (' + labels + ')',
     safeWebRisk: 'לא נמצאו איומים ידועים בקישור זה לפי Google Web Risk',
+    whitelistSafe: (name) => `הכתובת זוהתה כאתר הרשמי המאומת של ${name} (מתוך רשימת דומיינים שאומתה ידנית)`,
     heuristicOnlyPrefix: '(בדיקה בסיסית בלבד — Google Web Risk לא היה זמין כרגע) ',
     bothSafeSuffix: ', וגם מבנה הקישור עצמו לא מעורר חשד',
     uncertainPrefix: 'לא נמצא ברשימות הידועות של Google, אך מבנה הקישור מעורר חשד: ',
@@ -127,6 +156,7 @@ const MESSAGES = {
     },
     dangerWebRisk: (labels) => 'This link is flagged as dangerous by Google Web Risk (' + labels + ')',
     safeWebRisk: 'No known threats were found for this link by Google Web Risk',
+    whitelistSafe: (name) => `This address was identified as the verified official website of ${name} (from a manually verified domain list)`,
     heuristicOnlyPrefix: '(Basic check only — Google Web Risk was unavailable) ',
     bothSafeSuffix: ", and the link's own structure is not suspicious either",
     uncertainPrefix: "Not found on Google's known lists, but the link's structure looks suspicious: ",
@@ -165,6 +195,7 @@ const MESSAGES = {
     },
     dangerWebRisk: (labels) => 'Эта ссылка помечена как опасная сервисом Google Web Risk (' + labels + ')',
     safeWebRisk: 'Известных угроз для этой ссылки не найдено (по данным Google Web Risk)',
+    whitelistSafe: (name) => `Этот адрес определён как проверенный официальный сайт ${name} (из вручную проверенного списка доменов)`,
     heuristicOnlyPrefix: '(Только базовая проверка — Google Web Risk был недоступен) ',
     bothSafeSuffix: ', и структура самой ссылки также не вызывает подозрений',
     uncertainPrefix: 'Не найдено в известных списках Google, но структура ссылки выглядит подозрительно: ',
@@ -203,6 +234,7 @@ const MESSAGES = {
     },
     dangerWebRisk: (labels) => 'Ce lien est signalé comme dangereux par Google Web Risk (' + labels + ')',
     safeWebRisk: "Aucune menace connue n'a été trouvée pour ce lien par Google Web Risk",
+    whitelistSafe: (name) => `Cette adresse a été identifiée comme le site officiel vérifié de ${name} (issu d'une liste de domaines vérifiée manuellement)`,
     heuristicOnlyPrefix: '(Vérification de base uniquement — Google Web Risk était indisponible) ',
     bothSafeSuffix: ", et la structure du lien lui-même n'est pas non plus suspecte",
     uncertainPrefix: "Introuvable dans les listes connues de Google, mais la structure du lien semble suspecte : ",
@@ -241,6 +273,7 @@ const MESSAGES = {
     },
     dangerWebRisk: (labels) => 'تم وضع علامة على هذا الرابط بأنه خطير بواسطة Google Web Risk (' + labels + ')',
     safeWebRisk: 'لم يتم العثور على تهديدات معروفة لهذا الرابط وفقًا لـ Google Web Risk',
+    whitelistSafe: (name) => `تم التعرف على هذا العنوان كموقع رسمي موثّق لـ ${name} (من قائمة نطاقات تم التحقق منها يدويًا)`,
     heuristicOnlyPrefix: '(فحص أساسي فقط — لم تكن خدمة Google Web Risk متاحة) ',
     bothSafeSuffix: '، كما أن بنية الرابط نفسها لا تثير الشبهة',
     uncertainPrefix: 'لم يُعثر عليه في قوائم Google المعروفة، لكن بنية الرابط تثير الشبهة: ',
@@ -445,13 +478,45 @@ export default async function handler(req, res) {
   }
 
   const apiKey = process.env.GOOGLE_API_KEY;
+  if (!apiKey) console.error('GOOGLE_API_KEY is not set in the environment');
+
+  // ---------- manually-verified domain whitelist (fast path) ----------
+  //
+  // Checked against finalUrl (the actual destination, after following any
+  // redirects) rather than the raw input -- checking the raw link's
+  // hostname would let an open redirect on a whitelisted domain itself
+  // (e.g. bank.co.il/redirect?url=evil.com) slip a completely different
+  // destination past this check. See api/_lib/domain-whitelist.js and its
+  // DOMAIN_WHITELIST.md for what's on this list and exact-match semantics.
+  //
+  // The user-facing response is immediate and never waits on Web Risk --
+  // but a whitelisted domain still gets a *sampled*, best-effort Web Risk
+  // check in the background, purely as a safety net in case one of these
+  // domains is ever compromised or later listed. See
+  // backgroundVerifyWhitelistedDomain() below and DOMAIN_WHITELIST.md's
+  // "Safety net" section for the full reasoning (why it's sampled, what
+  // happens if it finds something, and why it never overrides or
+  // retroactively changes the response already sent).
+  const whitelistHostname = safeHostname(finalUrl);
+  const whitelistEntry = whitelistHostname ? getWhitelistEntry(whitelistHostname) : null;
+  if (whitelistEntry) {
+    if (apiKey) backgroundVerifyWhitelistedDomain(finalUrl, whitelistEntry, apiKey, lang);
+    // whitelistEntry.name is Hebrew-only (see domain-whitelist.js -- 146
+    // entries, one name field, not translated per language). Embedding it
+    // as-is into an otherwise-translated en/ru/fr/ar sentence would read
+    // as broken localization, so those languages get the domain itself
+    // instead: unambiguous, always correct, and needs no per-entry
+    // translation work to add or maintain.
+    const whitelistLabel = lang === 'he' ? whitelistEntry.name : whitelistEntry.domain;
+    return sendVerdict(req, res, 'safe', m.whitelistSafe(whitelistLabel));
+  }
+
   const webRiskPromise = apiKey
     ? checkWebRisk(finalUrl, apiKey, lang).catch((err) => {
         console.error('check-link error (webrisk):', err);
         return null; // fall through to heuristic-only below
       })
     : Promise.resolve(null);
-  if (!apiKey) console.error('GOOGLE_API_KEY is not set in the environment');
 
   // Started concurrently with Web Risk -- both depend only on finalUrl and
   // have no dependency on each other. If Web Risk comes back "danger"
@@ -642,6 +707,89 @@ async function checkWebRisk(url, apiKey, lang) {
 function translateThreatTypes(types, lang) {
   const labels = MESSAGES[lang].threatLabels;
   return types.map((t) => labels[t] || t).join(', ');
+}
+
+// ---------- whitelist safety net: sampled background Web Risk check ----------
+//
+// A whitelisted domain already got an immediate "safe" response with no
+// wait on Web Risk at all (see the whitelist block in handler() above) --
+// this runs strictly AFTER that response is on its way, purely as a
+// best-effort safety net for the rare case where a whitelisted domain is
+// later compromised or itself lands on a Web Risk threat list. It can
+// NEVER change the response the user already received (no retroactive
+// push exists in this architecture) -- its only effect is a log for a
+// human to act on. It deliberately never removes anything from the
+// whitelist itself: see DOMAIN_WHITELIST.md, "a wrong/stale entry needs a
+// human decision, not an automatic one."
+//
+// Sampled rather than run on every request (see
+// whitelistWebRiskSampleRate() above): whitelisted domains are exactly
+// the highest-traffic *legitimate* links this app sees (a real bank link
+// gets checked far more often than a phishing one), so checking every
+// single one would meaningfully eat into the free-tier Web Risk quota for
+// a safety net whose entire premise is "this basically never fires." This
+// is separate from, and does not interact with, the per-IP rate limiter
+// above -- that protects against one client hammering the endpoint; this
+// is an internal sampling decision about our own outbound Web Risk calls.
+//
+// `waitUntil` (from `@vercel/functions`) extends the serverless
+// function's lifetime just long enough for this specific background call
+// to actually finish and its log (if any) to actually flush -- without
+// it, the instance could freeze immediately after the response above is
+// sent and silently drop this work, which would defeat the entire point
+// of a safety net. (This is the one background task in this file that
+// genuinely needs that guarantee -- the fire-and-forget infrastructure
+// lookup elsewhere in this file has no result anyone would ever consume
+// after the response is gone, so it deliberately does NOT use
+// `waitUntil`; see the comment on infraPromise in handler().) Outside a
+// real Vercel request context (local dev, this project's own tests),
+// `waitUntil` is a documented safe no-op -- the underlying promise below
+// still runs normally either way.
+
+// Test-only seam (same pattern as __setRatelimiterForTests /
+// __setDnsForTests elsewhere in this codebase): lets test.mjs await the
+// exact background promise this call scheduled, instead of guessing at a
+// timeout, so tests are deterministic rather than racy.
+let lastWhitelistBackgroundWork = null;
+export function __getLastWhitelistBackgroundWorkForTests() {
+  return lastWhitelistBackgroundWork;
+}
+
+function backgroundVerifyWhitelistedDomain(finalUrl, whitelistEntry, apiKey, lang) {
+  if (Math.random() >= whitelistWebRiskSampleRate()) return; // not sampled this time
+
+  const work = checkWebRisk(finalUrl, apiKey, lang)
+    .then((result) => {
+      if (result && result.status === 'danger') {
+        // console.error (not .log/.warn) on purpose: this project has no
+        // dedicated alerting/monitoring (no Sentry, no external webhook)
+        // beyond Vercel's own log viewer, so a loud, greppable,
+        // high-severity line IS the alerting mechanism today -- it needs
+        // to stand out under Vercel's "Error" log-level filter. See
+        // DOMAIN_WHITELIST.md's "Safety net" section for what a human
+        // should do when this fires.
+        console.error(
+          '[WHITELIST SAFETY NET] Web Risk flagged a WHITELISTED domain as dangerous — review immediately:',
+          JSON.stringify({
+            domain: whitelistEntry.domain,
+            name: whitelistEntry.name,
+            finalUrl,
+            webRiskDetails: result.details,
+            at: new Date().toISOString(),
+          })
+        );
+      }
+    })
+    .catch((err) => {
+      // Same defensive-backstop reasoning as webRiskPromise's/infraPromise's
+      // own .catch() elsewhere in this file: this is fire-and-forget with
+      // nothing left to observe it, and an unhandled rejection crashes the
+      // whole process outright on Node 24, not just logs a warning.
+      console.error('whitelist background verification error:', err);
+    });
+
+  lastWhitelistBackgroundWork = work;
+  waitUntil(work);
 }
 
 // ---------- registrable-domain parsing (Public Suffix List, not naive split('.')) ----------

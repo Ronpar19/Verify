@@ -190,6 +190,7 @@ works reliably as a real native API. The user copies the link first
 | `APP_SECRET` | Vercel (server) + Expo `.env` (`EXPO_PUBLIC_APP_SECRET`) | Shared-secret header to reduce casual abuse of the public endpoint |
 | `STATS_SECRET` | Vercel (server) | Protects the internal `/api/stats` endpoint |
 | `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | Vercel (server) | Backing store for rate limiting and usage counters |
+| `WHITELIST_WEBRISK_SAMPLE_RATE` | Vercel (server), optional | Fraction (0–1) of whitelisted-domain requests that get a background Web Risk safety-net check; defaults to 0.1. See `api/_lib/DOMAIN_WHITELIST.md` |
 | `EXPO_PUBLIC_API_URL` | Expo `.env` | Points the app at the deployed backend |
 
 ## Security notes (read before shipping)
