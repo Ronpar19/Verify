@@ -46,10 +46,22 @@ const RATE_LIMIT_WINDOW = '1 h';
 // and DOMAIN_WHITELIST.md's "Safety net" section for the full reasoning).
 // Overridable via env for tuning without a code change -- same
 // graceful-config pattern as APP_SECRET/GOOGLE_API_KEY elsewhere in this
-// file. Falls back to the default on anything missing or out of [0, 1].
+// file. Falls back to the default on anything missing or out of [0, 1] --
+// including an empty string, which must be checked explicitly BEFORE
+// Number(): Number('') is 0 (not NaN), so an unset-but-present env var
+// (exactly what .env.example ships: `WHITELIST_WEBRISK_SAMPLE_RATE=` with
+// no value) would otherwise silently parse as a valid rate of 0 and
+// disable the safety net entirely, instead of falling through to this
+// default as documented.
 const DEFAULT_WHITELIST_WEBRISK_SAMPLE_RATE = 0.1;
-function whitelistWebRiskSampleRate() {
-  const parsed = Number(process.env.WHITELIST_WEBRISK_SAMPLE_RATE);
+// Exported directly (not a __-prefixed test-only seam) -- a genuinely
+// useful pure function, same reasoning as heuristicAnalysis's own export
+// below: lets tests exercise the parsing/fallback logic itself directly,
+// rather than only inferring it statistically through many sampled calls.
+export function whitelistWebRiskSampleRate() {
+  const raw = process.env.WHITELIST_WEBRISK_SAMPLE_RATE;
+  if (typeof raw !== 'string' || raw.trim() === '') return DEFAULT_WHITELIST_WEBRISK_SAMPLE_RATE;
+  const parsed = Number(raw);
   return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1
     ? parsed
     : DEFAULT_WHITELIST_WEBRISK_SAMPLE_RATE;

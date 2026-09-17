@@ -1,4 +1,4 @@
-import handler, { __setRatelimiterForTests, heuristicAnalysis, __getLastWhitelistBackgroundWorkForTests } from './api/check-link.js';
+import handler, { __setRatelimiterForTests, heuristicAnalysis, __getLastWhitelistBackgroundWorkForTests, whitelistWebRiskSampleRate } from './api/check-link.js';
 import statsHandler from './api/stats.js';
 import { __setRedisForTests } from './api/_lib/redis.js';
 import { infrastructureAnalysis, __setDnsForTests, __setRdapFetchForTests } from './api/_lib/infrastructure.js';
@@ -881,6 +881,41 @@ async function run() {
     await handler({ method: 'POST', body: { link: 'https://leumi.co.il/another-page' } }, res2);
     check('sampling: rate=0 -> no new background check scheduled', __getLastWhitelistBackgroundWorkForTests() === markerWork);
     check('sampling: rate=0 -> Web Risk not called', !fetchSpy2.calls.some((c) => c.url.includes('webrisk.googleapis.com')), fetchSpy2.calls);
+  }
+
+  // --- 55. Whitelist safety net: whitelistWebRiskSampleRate() falls back
+  // to the documented default on an EMPTY string, not to 0 -- Number('')
+  // is 0 (not NaN), so this must be checked explicitly before Number();
+  // an empty-but-present env var is exactly what .env.example ships
+  // (`WHITELIST_WEBRISK_SAMPLE_RATE=` with no value), so this is the
+  // realistic "someone copied .env.example as-is" case, not a contrived
+  // one. Also covers whitespace-only, missing entirely, non-numeric, and
+  // out-of-range, all of which must fall back the same way. ---
+  {
+    const originalRate = process.env.WHITELIST_WEBRISK_SAMPLE_RATE;
+
+    process.env.WHITELIST_WEBRISK_SAMPLE_RATE = '';
+    check('empty string -> falls back to the 0.1 default, not 0', whitelistWebRiskSampleRate() === 0.1, whitelistWebRiskSampleRate());
+
+    process.env.WHITELIST_WEBRISK_SAMPLE_RATE = '   ';
+    check('whitespace-only -> falls back to the 0.1 default', whitelistWebRiskSampleRate() === 0.1, whitelistWebRiskSampleRate());
+
+    delete process.env.WHITELIST_WEBRISK_SAMPLE_RATE;
+    check('unset entirely -> falls back to the 0.1 default', whitelistWebRiskSampleRate() === 0.1, whitelistWebRiskSampleRate());
+
+    process.env.WHITELIST_WEBRISK_SAMPLE_RATE = 'not-a-number';
+    check('non-numeric -> falls back to the 0.1 default', whitelistWebRiskSampleRate() === 0.1, whitelistWebRiskSampleRate());
+
+    process.env.WHITELIST_WEBRISK_SAMPLE_RATE = '5';
+    check('out-of-range (>1) -> falls back to the 0.1 default', whitelistWebRiskSampleRate() === 0.1, whitelistWebRiskSampleRate());
+
+    process.env.WHITELIST_WEBRISK_SAMPLE_RATE = '0.25';
+    check('a genuinely valid rate is used as-is, not overridden', whitelistWebRiskSampleRate() === 0.25, whitelistWebRiskSampleRate());
+
+    process.env.WHITELIST_WEBRISK_SAMPLE_RATE = '0';
+    check('an explicit 0 IS honored (disables the safety net on purpose) -- distinct from an empty/missing value', whitelistWebRiskSampleRate() === 0, whitelistWebRiskSampleRate());
+
+    process.env.WHITELIST_WEBRISK_SAMPLE_RATE = originalRate;
   }
 
   console.log('\n' + pass + ' passed, ' + fail + ' failed');
