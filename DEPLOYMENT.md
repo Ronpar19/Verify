@@ -102,6 +102,30 @@ Expect `{"status":"safe","details":"..."}`. Google publishes a safe
 test URL for the malware list to see the "danger" path too:
 `http://testsafebrowsing.appspot.com/s/malware.html`.
 
+**GitHub auto-deploy — two real pitfalls hit while wiring this up,
+not hypotheticals:** this project has two Vercel projects —
+`verify_app` (the real backend, all env vars live here) and
+`verify_web` (the PWA, effectively unused). Getting "push to `main`
+auto-deploys the backend" actually working took two separate fixes:
+
+1. **Wrong project connected.** The GitHub repo was first connected
+   to `verify_web` instead of `verify_app` by mistake — the two
+   project names/dashboards are similar enough to mix up. Deployments
+   showed up, just not on the project that matters. Fixed by
+   reconnecting the repo specifically under `verify_app`.
+2. **Wrong dashboard control used.** Separately, using the project's
+   general **"Connect"** button/card (rather than
+   **Project → Settings → Git**) looked like it linked the repo, but
+   did not actually register the deploy webhook — pushes to `main`
+   produced no new deployment at all, silently. **Settings → Git** is
+   the one place that actually wires up GitHub's auto-deploy webhook.
+
+If a push to `main` isn't producing a new deployment on `verify_app`'s
+Deployments tab, check both: (a) that you're looking at `verify_app`,
+not `verify_web`, and (b) **Settings → Git** specifically shows the
+repo connected there, not just that it looks connected somewhere else
+in the UI.
+
 **Local development:** `vercel dev` reads `.env` (copy `.env.example`
 → `.env` and fill in your key) so you can test against `localhost`
 before deploying.
