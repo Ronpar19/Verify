@@ -501,7 +501,14 @@ export default async function handler(req, res) {
   const whitelistEntry = whitelistHostname ? getWhitelistEntry(whitelistHostname) : null;
   if (whitelistEntry) {
     if (apiKey) backgroundVerifyWhitelistedDomain(finalUrl, whitelistEntry, apiKey, lang);
-    return sendVerdict(req, res, 'safe', m.whitelistSafe(whitelistEntry.name));
+    // whitelistEntry.name is Hebrew-only (see domain-whitelist.js -- 146
+    // entries, one name field, not translated per language). Embedding it
+    // as-is into an otherwise-translated en/ru/fr/ar sentence would read
+    // as broken localization, so those languages get the domain itself
+    // instead: unambiguous, always correct, and needs no per-entry
+    // translation work to add or maintain.
+    const whitelistLabel = lang === 'he' ? whitelistEntry.name : whitelistEntry.domain;
+    return sendVerdict(req, res, 'safe', m.whitelistSafe(whitelistLabel));
   }
 
   const webRiskPromise = apiKey

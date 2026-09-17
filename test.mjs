@@ -918,6 +918,32 @@ async function run() {
     process.env.WHITELIST_WEBRISK_SAMPLE_RATE = originalRate;
   }
 
+  // --- 56. Whitelist message localization: a non-Hebrew request gets the
+  // domain (not the Hebrew-only org name) in the message -- embedding
+  // whitelistEntry.name as-is would put a raw Hebrew string inside an
+  // otherwise-translated en/ru/fr/ar sentence for every one of the 146
+  // whitelisted domains ---
+  {
+    const HEBREW_RE = /[֐-׿]/;
+    for (const lang of ['en', 'ru', 'fr', 'ar']) {
+      const fetchSpy = spyFetch(async () => { throw new Error('Web Risk should not have been called'); });
+      global.fetch = fetchSpy;
+      const res = mockRes();
+      await handler({ method: 'POST', body: { link: 'https://leumi.co.il/some/page', lang } }, res);
+      check(`whitelist message (${lang}) contains no Hebrew characters`, !HEBREW_RE.test(res._json.details), res._json);
+      check(`whitelist message (${lang}) names the domain instead`, res._json.details.includes('leumi.co.il'), res._json);
+    }
+
+    // Regression check: Hebrew requests still get the human-readable org
+    // name (not the bare domain) -- this fix must not have broken the
+    // original, working behavior for the app's primary language.
+    const fetchSpy = spyFetch(async () => { throw new Error('Web Risk should not have been called'); });
+    global.fetch = fetchSpy;
+    const res = mockRes();
+    await handler({ method: 'POST', body: { link: 'https://leumi.co.il/some/page', lang: 'he' } }, res);
+    check('whitelist message (he) still uses the human-readable org name', res._json.details.includes('בנק לאומי'), res._json);
+  }
+
   console.log('\n' + pass + ' passed, ' + fail + ' failed');
   process.exit(fail ? 1 : 0);
 }
