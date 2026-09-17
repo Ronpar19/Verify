@@ -3,19 +3,20 @@
 // Manually-verified allowlist of official Israeli domains (banks, health
 // funds, insurers, telecoms, government bodies, shipping/logistics, ...) for
 // the phishing-check pipeline in api/check-link.js. Built and cross-checked
-// by hand over several rounds of DNS resolution, SSL inspection, WHOIS/RDAP
-// lookups, and web research against each organization's own stated domain --
-// NOT scraped or auto-generated. See DOMAIN_WHITELIST.md in this directory
-// for the verification methodology, the date of the last full pass, and the
-// process for adding to this list.
+// by hand over several rounds of DNS resolution and web research against
+// each organization's own stated domain -- NOT scraped or auto-generated,
+// and NOT independently verified via live SSL inspection or WHOIS/RDAP
+// lookups for every entry (see DOMAIN_WHITELIST.md in this directory for
+// exactly what was and wasn't checked, the date of the last full pass, and
+// the process for adding to this list).
 //
 // A domain on this list is trusted enough for check-link.js's handler() to
-// return "safe" immediately WITHOUT calling Google Web Risk (or running the
-// structural heuristic / infrastructure layers) -- see the WHITELIST section
-// in check-link.js for exactly where this is consulted, and
-// DOMAIN_WHITELIST.md for the tradeoff that comes with skipping Web Risk
-// entirely (it also means Web Risk never gets a chance to flag one of these
-// domains if it were ever compromised or listed after the fact).
+// return "safe" immediately, with NO WAIT on Google Web Risk (or the
+// structural heuristic / infrastructure layers) -- see the WHITELIST
+// section in check-link.js for exactly where this is consulted. Web Risk
+// is still checked for these domains, in the background, as a sampled
+// safety net -- see DOMAIN_WHITELIST.md's "Safety net" section for the
+// full mechanism and why it's sampled rather than run on every request.
 //
 // Matching is EXACT on the full hostname, case-insensitive -- no implicit
 // subdomain expansion in either direction. Several entries are deliberately
