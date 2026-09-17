@@ -102,30 +102,6 @@ Expect `{"status":"safe","details":"..."}`. Google publishes a safe
 test URL for the malware list to see the "danger" path too:
 `http://testsafebrowsing.appspot.com/s/malware.html`.
 
-**GitHub auto-deploy — two real pitfalls hit while wiring this up,
-not hypotheticals:** this project has two Vercel projects —
-`verify_app` (the real backend, all env vars live here) and
-`verify_web` (the PWA, effectively unused). Getting "push to `main`
-auto-deploys the backend" actually working took two separate fixes:
-
-1. **Wrong project connected.** The GitHub repo was first connected
-   to `verify_web` instead of `verify_app` by mistake — the two
-   project names/dashboards are similar enough to mix up. Deployments
-   showed up, just not on the project that matters. Fixed by
-   reconnecting the repo specifically under `verify_app`.
-2. **Wrong dashboard control used.** Separately, using the project's
-   general **"Connect"** button/card (rather than
-   **Project → Settings → Git**) looked like it linked the repo, but
-   did not actually register the deploy webhook — pushes to `main`
-   produced no new deployment at all, silently. **Settings → Git** is
-   the one place that actually wires up GitHub's auto-deploy webhook.
-
-If a push to `main` isn't producing a new deployment on `verify_app`'s
-Deployments tab, check both: (a) that you're looking at `verify_app`,
-not `verify_web`, and (b) **Settings → Git** specifically shows the
-repo connected there, not just that it looks connected somewhere else
-in the UI.
-
 **Local development:** `vercel dev` reads `.env` (copy `.env.example`
 → `.env` and fill in your key) so you can test against `localhost`
 before deploying.
@@ -214,7 +190,6 @@ works reliably as a real native API. The user copies the link first
 | `APP_SECRET` | Vercel (server) + Expo `.env` (`EXPO_PUBLIC_APP_SECRET`) | Shared-secret header to reduce casual abuse of the public endpoint |
 | `STATS_SECRET` | Vercel (server) | Protects the internal `/api/stats` endpoint |
 | `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | Vercel (server) | Backing store for rate limiting and usage counters |
-| `WHITELIST_WEBRISK_SAMPLE_RATE` | Vercel (server), optional | Fraction (0–1) of whitelisted-domain requests that get a background Web Risk safety-net check; defaults to 0.1. See `api/_lib/DOMAIN_WHITELIST.md` |
 | `EXPO_PUBLIC_API_URL` | Expo `.env` | Points the app at the deployed backend |
 
 ## Security notes (read before shipping)

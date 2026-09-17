@@ -6,13 +6,9 @@
     "engines": {
         "node": "24.x"
     },
-    "scripts": {
-        "test": "node test.mjs"
-    },
     "dependencies": {
         "@upstash/ratelimit": "^2.0.8",
         "@upstash/redis": "^1.38.2",
-        "@vercel/functions": "^3.9.8",
         "ipaddr.js": "^2.5.0",
         "psl": "^1.15.0",
         "punycode": "^2.3.1"
