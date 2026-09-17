@@ -66,7 +66,7 @@ Desktop\link-checker-vercel\              <- הבקאנד + שורש
 │       ├── infrastructure.js             <- שכבת DNS/RDAP
 │       ├── domain-whitelist.js           <- רשימת דומיינים ישראליים מאומתת ידנית (נוספה בשיחה אחרונה)
 │       └── DOMAIN_WHITELIST.md           <- מתודולוגיית האימות + תהליך עדכון הרשימה
-├── test.mjs                               <- 157 טסטים לבקאנד (heuristic + infra + whitelist + safety net + API)
+├── test.mjs                               <- 173 טסטים לבקאנד (heuristic + infra + whitelist + safety net + API)
 ├── package.json, README.md, vercel.json
 ├── DEPLOYMENT.md                          <- מדריך פריסה מלא צעד-אחר-צעד
 ├── .env.example, .gitignore
@@ -254,15 +254,20 @@ Desktop\link-checker-vercel\              <- הבקאנד + שורש
 ---
 
 ## סטטוס טסטים
-- **בקאנד**: 157/157 (`node test.mjs` מהשורש) — כולל heuristic v2,
+- **בקאנד**: 173/173 (`node test.mjs` מהשורש) — כולל heuristic v2,
   שכבת ה-infra (עם DNS/RDAP מדומים, בלי קריאות רשת אמיתיות בטסטים),
   race pattern (מוודא ש-"danger" חוזר מהר בלי להמתין ל-infra תקוע),
   14 טסטים ל-domain whitelist (exact match, case-insensitivity, ווידוא
-  שדומיינים דומים-אך-לא-זהים לא מקבלים safe), ו-13 טסטים נוספים
+  שדומיינים דומים-אך-לא-זהים לא מקבלים safe), 13 טסטים נוספים
   ל-safety net (תשובה מיידית גם כש-Web Risk תקוע ברקע, Web Risk באמת
   נקרא ברקע כשנדגם, ה-warning log נכתב נכון כש-Web Risk מחזיר danger,
-  ושה-sampling באמת מכבה/מדליק את הבדיקה ב-rate=0/1).
+  ושה-sampling באמת מכבה/מדליק את הבדיקה ב-rate=0/1), ו-16 טסטים
+  מסבב תיקוני `/code-review` (7 על parsing של `WHITELIST_WEBRISK_SAMPLE_RATE`
+  — string ריק/whitespace/לא מוגדר/לא-מספרי/מחוץ לטווח נופלים נכון
+  ל-default, לא ל-0 — ו-9 על לוקליזציה: וידוא שהודעת ה-whitelist
+  בשפות שאינן עברית לא מכילה תווים בעברית, ושעברית לא נפגעה).
 - **extractUrls**: 15/15 (`node test-extract-urls.mjs` מתוך `mobile\`).
+- **סה"כ**: 188 טסטים אוטומטיים (173 בקאנד + 15 mobile).
 - **גרסת SDK**: Expo 54. תלויות עיקריות ב-mobile:
   `react-native-svg`, `expo-linear-gradient`, `expo-share-intent`,
   `@react-native-async-storage/async-storage`, `expo-updates`.

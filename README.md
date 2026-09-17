@@ -63,7 +63,7 @@ project is interesting* below for why.)
 - Redirect resolution + SSRF protection
 - Per-IP rate limiting, shared-secret request auth, and privacy-
   conscious usage stats, all backed by Upstash Redis
-- 172 automated tests across two suites (backend detection logic +
+- 188 automated tests across two suites (backend detection logic +
   API behavior, and URL extraction), zero live network calls
   required to run either
 
