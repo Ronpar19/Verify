@@ -63,8 +63,10 @@ Desktop\link-checker-vercel\              <- הבקאנד + שורש
 │   └── _lib\
 │       ├── redis.js                      <- לקוח Upstash Redis משותף
 │       ├── stats.js                      <- ספירת שימוש פרטית (בלי לשמור תוכן קישורים)
-│       └── infrastructure.js             <- שכבת DNS/RDAP (נוספה בשיחה אחרונה)
-├── test.mjs                               <- 130 טסטים לבקאנד (heuristic + infra + API)
+│       ├── infrastructure.js             <- שכבת DNS/RDAP
+│       ├── domain-whitelist.js           <- רשימת דומיינים ישראליים מאומתת ידנית (נוספה בשיחה אחרונה)
+│       └── DOMAIN_WHITELIST.md           <- מתודולוגיית האימות + תהליך עדכון הרשימה
+├── test.mjs                               <- 144 טסטים לבקאנד (heuristic + infra + whitelist + API)
 ├── package.json, README.md, vercel.json
 ├── DEPLOYMENT.md                          <- מדריך פריסה מלא צעד-אחר-צעד
 ├── .env.example, .gitignore
@@ -197,6 +199,26 @@ Desktop\link-checker-vercel\              <- הבקאנד + שורש
   מפורש כדי שרג'קשן עתידי לא יקרוס את ה-process (אומת: Node 24 קורס
   על unhandled rejection, לא רק מזהיר).
 
+### 4. Domain Whitelist (`api/_lib/domain-whitelist.js` — החדש ביותר)
+רשימה של ~146 דומיינים ישראליים רשמיים (בנקים, קופות חולים, חברות
+ביטוח, תקשורת, ממשלה, שילוח, תחבורה, אנרגיה, קמעונאות) שאומתה **ידנית**
+על פני כמה סבבי בדיקה — DNS resolution לכל דומיין, ואיפה שנכשל: מחקר
+אינטרנט מול מקורות בלתי-תלויים ותיקון חוזר. תיעוד מלא של המתודולוגיה
+והתהליך לעדכון ב-`api/_lib/DOMAIN_WHITELIST.md`.
+
+- **שונה מהותית מ-`KNOWN_SAFE_DOMAINS`** הקיים ב-`check-link.js`: זו
+  רשימה חדשה, נפרדת, שנבדקת **לפני** הכל (Web Risk, heuristic, infra)
+  ומחזירה `safe` מיידי — לא רק בונוס לציון.
+- **Exact match בלבד**, ללא הרחבת subdomain אוטומטית לאף כיוון: כמה
+  רשומות הן במפורש `www.<domain>` (למשל `www.isa.gov.il`,
+  `www.idf.il`) כי ל-apex אין רשומת A — בקשה ל-apex לא תואמת את רשומת
+  ה-www ולהפך.
+- **ה-tradeoff המודע**: דילוג מלא על Web Risk אומר ש-Web Risk לא
+  מקבל הזדמנות לדגול דומיין מהרשימה אם הוא ייפרץ אי-פעם — מתועד
+  במפורש ב-DOMAIN_WHITELIST.md.
+- נבדק מול `finalUrl` (אחרי redirect resolution), לא מול הקלט הגולמי —
+  כדי שלא ייתכן open-redirect על דומיין ברשימה שיחמוק מהבדיקה.
+
 ---
 
 ## 🎨 עיצוב, נגישות, ופיצ'רי משתמש
@@ -224,9 +246,12 @@ Desktop\link-checker-vercel\              <- הבקאנד + שורש
 ---
 
 ## סטטוס טסטים
-- **בקאנד**: 130/130 (`node test.mjs` מהשורש) — כולל heuristic v2,
+- **בקאנד**: 144/144 (`node test.mjs` מהשורש) — כולל heuristic v2,
   שכבת ה-infra (עם DNS/RDAP מדומים, בלי קריאות רשת אמיתיות בטסטים),
-  ו-race pattern (מוודא ש-"danger" חוזר מהר בלי להמתין ל-infra תקוע).
+  race pattern (מוודא ש-"danger" חוזר מהר בלי להמתין ל-infra תקוע),
+  ו-14 טסטים חדשים ל-domain whitelist (exact match, case-insensitivity,
+  ווידוא שדומיינים דומים-אך-לא-זהים לא מקבלים safe, ושה-Web Risk API
+  באמת לא נקרא לדומיין ברשימה — לא רק שהפלט יוצא "safe").
 - **extractUrls**: 15/15 (`node test-extract-urls.mjs` מתוך `mobile\`).
 - **גרסת SDK**: Expo 54. תלויות עיקריות ב-mobile:
   `react-native-svg`, `expo-linear-gradient`, `expo-share-intent`,

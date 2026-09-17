@@ -48,6 +48,11 @@ project is interesting* below for why.)
 - **Three independent detection signals**, not one: Google Web Risk,
   a structural URL heuristic, and a DNS/infrastructure risk layer
   (see below)
+- A manually-verified allowlist of ~146 official Israeli domains
+  (banks, health funds, insurers, government, ...) that short-circuits
+  straight to "safe" *before* any of the three signals above run —
+  see `api/_lib/DOMAIN_WHITELIST.md` for how it was built and its
+  explicit tradeoffs
 - Full 5-language localization (he/en/ru/fr/ar), with RTL support
 - Screen-reader accessibility: roles, labels, and live-region result
   announcements throughout the main flow
@@ -56,7 +61,7 @@ project is interesting* below for why.)
 - Redirect resolution + SSRF protection
 - Per-IP rate limiting, shared-secret request auth, and privacy-
   conscious usage stats, all backed by Upstash Redis
-- 145 automated tests across two suites (backend detection logic +
+- 159 automated tests across two suites (backend detection logic +
   API behavior, and URL extraction), zero live network calls
   required to run either
 
@@ -142,6 +147,8 @@ deliberately for a project meant to be maintained long-term.
                                        │
                         resolve redirects (SSRF-guarded)
                                        │
+                     domain on manually-verified allowlist? ──yes──▶ safe
+                                       │ no                     (Web Risk never called)
                     ┌──────────────────┼──────────────────┐
                     ▼                  ▼                  ▼
              structural           Google Web Risk     DNS / RDAP
@@ -169,18 +176,23 @@ Backend API (for reference, not meant for direct browsing):
    shortened link gets checked at its *real* destination.
 3. Refuses to follow a redirect into a private/loopback/link-local
    address (SSRF guard) — before any connection is attempted.
-4. Starts the Google Web Risk lookup and the DNS/infrastructure
-   analysis (`api/_lib/infrastructure.js`) concurrently.
-5. If Web Risk confirms "dangerous," returns immediately — no
+4. Checks the *final* destination's hostname against the manually-
+   verified domain allowlist (`api/_lib/domain-whitelist.js`, exact
+   match only). A hit returns `"safe"` immediately, with no Web Risk
+   call and no heuristic/infrastructure analysis at all.
+5. Otherwise, starts the Google Web Risk lookup and the
+   DNS/infrastructure analysis (`api/_lib/infrastructure.js`)
+   concurrently.
+6. If Web Risk confirms "dangerous," returns immediately — no
    infrastructure signal could change that outcome anyway.
    Otherwise, waits for the infrastructure result and combines it
    with the structural heuristic's score into one verdict.
-6. Any failure anywhere in that chain degrades to a cautious
+7. Any failure anywhere in that chain degrades to a cautious
    `"unknown"`/`"uncertain"` result with a `200` — the app never
    crashes or hangs, and DNS/RDAP unavailability (which is expected
    and silent for some TLDs — see `infrastructure.js`) is never
    itself treated as suspicious.
-7. Records privacy-conscious, aggregate-only usage stats (no link
+8. Records privacy-conscious, aggregate-only usage stats (no link
    content, no raw IP) via Upstash Redis.
 
 ## Security notes

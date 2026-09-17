@@ -2,6 +2,7 @@ import handler, { __setRatelimiterForTests, heuristicAnalysis } from './api/chec
 import statsHandler from './api/stats.js';
 import { __setRedisForTests } from './api/_lib/redis.js';
 import { infrastructureAnalysis, __setDnsForTests, __setRdapFetchForTests } from './api/_lib/infrastructure.js';
+import { getWhitelistEntry } from './api/_lib/domain-whitelist.js';
 
 let pass = 0, fail = 0;
 function check(name, cond, extra) {
@@ -48,6 +49,21 @@ function noRedirectFetch(webRiskResponder) {
     if (opts.method === 'HEAD') return { status: 200, headers: { get: () => null } };
     return webRiskResponder(url, opts);
   };
+}
+
+// Same as noRedirectFetch, but records every call so whitelist tests can
+// assert Web Risk was (or was NOT) actually reached -- the whitelist fast
+// path is only meaningful if it truly skips that network call, not just
+// the verdict derived from it.
+function spyFetch(webRiskResponder) {
+  const calls = [];
+  const fn = async (url, opts) => {
+    calls.push({ url: String(url), method: (opts && opts.method) || 'GET' });
+    if (opts && opts.method === 'HEAD') return { status: 200, headers: { get: () => null } };
+    return webRiskResponder(url, opts);
+  };
+  fn.calls = calls;
+  return fn;
 }
 
 // Minimal in-memory stand-in for the subset of @upstash/redis commands
@@ -700,6 +716,73 @@ async function run() {
     check('race pattern: non-danger path waits for and reflects infra signal', res._json.status !== 'safe', res._json);
     check('race pattern: still not an automatic "danger" (no highConfidence from infra)', res._json.status !== 'danger', res._json);
     __setDnsForTests(makeFakeDns());
+  }
+
+  // --- 47. Domain whitelist: a listed domain gets "safe" immediately,
+  // and Google Web Risk is never actually called for it (not just a
+  // "safe" verdict that happens to match -- the API call itself must not
+  // happen, per the whole point of the fast path) ---
+  {
+    const fetchSpy = spyFetch(async () => { throw new Error('Web Risk should not have been called'); });
+    global.fetch = fetchSpy;
+    const res = mockRes();
+    await handler({ method: 'POST', body: { link: 'https://leumi.co.il/some/page' } }, res);
+    check('whitelisted domain -> safe', res._json.status === 'safe', res._json);
+    check('whitelisted domain -> message names the organization', res._json.details.includes('בנק לאומי'), res._json);
+    check('whitelisted domain -> Web Risk endpoint never called', !fetchSpy.calls.some((c) => c.url.includes('webrisk.googleapis.com')), fetchSpy.calls);
+  }
+
+  // --- 48. Domain whitelist: a look-alike domain that is NOT on the list
+  // (hyphen instead of a dot, or the real domain tacked on as a decoy
+  // subdomain of an attacker-controlled one) must NOT get the free pass --
+  // Web Risk still gets called for it ---
+  {
+    const fetchSpy = spyFetch(async () => ({ ok: true, json: async () => ({}) }));
+    global.fetch = fetchSpy;
+    const res = mockRes();
+    await handler({ method: 'POST', body: { link: 'http://leumi-co.il/login' } }, res);
+    check('look-alike domain (leumi-co.il) is not whitelisted', getWhitelistEntry('leumi-co.il') === null);
+    check('look-alike domain -> Web Risk IS called (no free pass)', fetchSpy.calls.some((c) => c.url.includes('webrisk.googleapis.com')), fetchSpy.calls);
+  }
+  {
+    const fetchSpy = spyFetch(async () => ({ ok: true, json: async () => ({}) }));
+    global.fetch = fetchSpy;
+    const res = mockRes();
+    await handler({ method: 'POST', body: { link: 'http://leumi.co.il.scam.com/login' } }, res);
+    check('decoy-subdomain look-alike is not whitelisted', getWhitelistEntry('leumi.co.il.scam.com') === null);
+    check('decoy-subdomain look-alike -> Web Risk IS called (no free pass)', fetchSpy.calls.some((c) => c.url.includes('webrisk.googleapis.com')), fetchSpy.calls);
+  }
+
+  // --- 49. Domain whitelist: exact-match only, no implicit www./apex
+  // equivalence in either direction -- several real entries are "www.X"
+  // specifically because the bare apex has no DNS A record (see
+  // api/_lib/domain-whitelist.js), so the two must be treated as distinct
+  // hostnames, not aliases of each other ---
+  {
+    check('www.isa.gov.il is whitelisted', getWhitelistEntry('www.isa.gov.il') !== null);
+    check('bare apex isa.gov.il is NOT whitelisted (not an alias of www.isa.gov.il)', getWhitelistEntry('isa.gov.il') === null);
+
+    const fetchSpy = spyFetch(async () => { throw new Error('Web Risk should not have been called'); });
+    global.fetch = fetchSpy;
+    const res = mockRes();
+    await handler({ method: 'POST', body: { link: 'https://www.isa.gov.il/some/page' } }, res);
+    check('www.isa.gov.il request -> safe via whitelist, Web Risk never called', res._json.status === 'safe' && !fetchSpy.calls.some((c) => c.url.includes('webrisk.googleapis.com')), { json: res._json, calls: fetchSpy.calls });
+  }
+  {
+    const fetchSpy = spyFetch(async () => ({ ok: true, json: async () => ({}) }));
+    global.fetch = fetchSpy;
+    const res = mockRes();
+    await handler({ method: 'POST', body: { link: 'https://isa.gov.il/some/page' } }, res);
+    check('bare-apex isa.gov.il request -> falls through to Web Risk (not whitelisted)', fetchSpy.calls.some((c) => c.url.includes('webrisk.googleapis.com')), fetchSpy.calls);
+  }
+
+  // --- 50. Domain whitelist: matching is case-insensitive on the hostname,
+  // consistent with how hostnames are compared everywhere else in this
+  // codebase (e.g. isKnownSafe in heuristicAnalysis) ---
+  {
+    check('whitelist match is case-insensitive', getWhitelistEntry('LEUMI.CO.IL') !== null);
+    check('unknown domain -> null, not a thrown error', getWhitelistEntry('not-a-real-domain-xyz.example') === null);
+    check('empty/undefined hostname -> null, not a thrown error', getWhitelistEntry('') === null && getWhitelistEntry(undefined) === null);
   }
 
   console.log('\n' + pass + ' passed, ' + fail + ' failed');
