@@ -66,7 +66,7 @@ Desktop\link-checker-vercel\              <- הבקאנד + שורש
 │       ├── infrastructure.js             <- שכבת DNS/RDAP
 │       ├── domain-whitelist.js           <- רשימת דומיינים ישראליים מאומתת ידנית (נוספה בשיחה אחרונה)
 │       └── DOMAIN_WHITELIST.md           <- מתודולוגיית האימות + תהליך עדכון הרשימה
-├── test.mjs                               <- 144 טסטים לבקאנד (heuristic + infra + whitelist + API)
+├── test.mjs                               <- 157 טסטים לבקאנד (heuristic + infra + whitelist + safety net + API)
 ├── package.json, README.md, vercel.json
 ├── DEPLOYMENT.md                          <- מדריך פריסה מלא צעד-אחר-צעד
 ├── .env.example, .gitignore
@@ -213,9 +213,17 @@ Desktop\link-checker-vercel\              <- הבקאנד + שורש
   רשומות הן במפורש `www.<domain>` (למשל `www.isa.gov.il`,
   `www.idf.il`) כי ל-apex אין רשומת A — בקשה ל-apex לא תואמת את רשומת
   ה-www ולהפך.
-- **ה-tradeoff המודע**: דילוג מלא על Web Risk אומר ש-Web Risk לא
-  מקבל הזדמנות לדגול דומיין מהרשימה אם הוא ייפרץ אי-פעם — מתועד
-  במפורש ב-DOMAIN_WHITELIST.md.
+- **Safety net ברקע**: התשובה למשתמש עדיין מיידית ולא ממתינה ל-Web
+  Risk כלל, אבל `backgroundVerifyWhitelistedDomain()` עדיין קורא
+  ל-Web Risk **ברקע** (fire-and-forget, דרך `waitUntil` מ-
+  `@vercel/functions` כדי שה-instance לא יקפא לפני שהקריאה מסתיימת),
+  בדגימה (sample rate, ברירת מחדל 10% — `WHITELIST_WEBRISK_SAMPLE_RATE`)
+  כדי לא להכפיל את צריכת ה-quota על כל בקשה לדומיין הכי נפוץ. אם
+  Web Risk מחזיר "danger" על דומיין ברשימה — נכתב `console.error`
+  ברמת חומרה גבוהה עם prefix ייעודי (`[WHITELIST SAFETY NET]`, כי
+  אין monitoring/alerting חיצוני בפרויקט מעבר ל-Vercel logs), בלי
+  לשנות רטרואקטיבית את התשובה שכבר נשלחה, ובלי להסיר אוטומטית מהרשימה
+  — זו החלטה של בן אדם. מתועד במלואו ב-DOMAIN_WHITELIST.md.
 - נבדק מול `finalUrl` (אחרי redirect resolution), לא מול הקלט הגולמי —
   כדי שלא ייתכן open-redirect על דומיין ברשימה שיחמוק מהבדיקה.
 
@@ -246,12 +254,14 @@ Desktop\link-checker-vercel\              <- הבקאנד + שורש
 ---
 
 ## סטטוס טסטים
-- **בקאנד**: 144/144 (`node test.mjs` מהשורש) — כולל heuristic v2,
+- **בקאנד**: 157/157 (`node test.mjs` מהשורש) — כולל heuristic v2,
   שכבת ה-infra (עם DNS/RDAP מדומים, בלי קריאות רשת אמיתיות בטסטים),
   race pattern (מוודא ש-"danger" חוזר מהר בלי להמתין ל-infra תקוע),
-  ו-14 טסטים חדשים ל-domain whitelist (exact match, case-insensitivity,
-  ווידוא שדומיינים דומים-אך-לא-זהים לא מקבלים safe, ושה-Web Risk API
-  באמת לא נקרא לדומיין ברשימה — לא רק שהפלט יוצא "safe").
+  14 טסטים ל-domain whitelist (exact match, case-insensitivity, ווידוא
+  שדומיינים דומים-אך-לא-זהים לא מקבלים safe), ו-13 טסטים נוספים
+  ל-safety net (תשובה מיידית גם כש-Web Risk תקוע ברקע, Web Risk באמת
+  נקרא ברקע כשנדגם, ה-warning log נכתב נכון כש-Web Risk מחזיר danger,
+  ושה-sampling באמת מכבה/מדליק את הבדיקה ב-rate=0/1).
 - **extractUrls**: 15/15 (`node test-extract-urls.mjs` מתוך `mobile\`).
 - **גרסת SDK**: Expo 54. תלויות עיקריות ב-mobile:
   `react-native-svg`, `expo-linear-gradient`, `expo-share-intent`,

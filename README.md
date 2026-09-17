@@ -50,7 +50,9 @@ project is interesting* below for why.)
   (see below)
 - A manually-verified allowlist of ~146 official Israeli domains
   (banks, health funds, insurers, government, ...) that short-circuits
-  straight to "safe" *before* any of the three signals above run —
+  straight to "safe" *before* any of the three signals above run, with
+  no wait on Web Risk at all — backed by a sampled, fire-and-forget
+  Web Risk check that still runs in the background as a safety net —
   see `api/_lib/DOMAIN_WHITELIST.md` for how it was built and its
   explicit tradeoffs
 - Full 5-language localization (he/en/ru/fr/ar), with RTL support
@@ -61,7 +63,7 @@ project is interesting* below for why.)
 - Redirect resolution + SSRF protection
 - Per-IP rate limiting, shared-secret request auth, and privacy-
   conscious usage stats, all backed by Upstash Redis
-- 159 automated tests across two suites (backend detection logic +
+- 172 automated tests across two suites (backend detection logic +
   API behavior, and URL extraction), zero live network calls
   required to run either
 
@@ -147,10 +149,10 @@ deliberately for a project meant to be maintained long-term.
                                        │
                         resolve redirects (SSRF-guarded)
                                        │
-                     domain on manually-verified allowlist? ──yes──▶ safe
-                                       │ no                     (Web Risk never called)
-                    ┌──────────────────┼──────────────────┐
-                    ▼                  ▼                  ▼
+          domain on manually-verified allowlist? ──yes──▶ safe, returned immediately
+                                       │ no                (a sampled Web Risk check
+                    ┌──────────────────┼──────────────────┐ still runs in the
+                    ▼                  ▼                  ▼ background as a safety net)
              structural           Google Web Risk     DNS / RDAP
              heuristic          (runs concurrently    infrastructure
           (typosquatting,        with infra layer —    layer (private-IP
@@ -178,8 +180,11 @@ Backend API (for reference, not meant for direct browsing):
    address (SSRF guard) — before any connection is attempted.
 4. Checks the *final* destination's hostname against the manually-
    verified domain allowlist (`api/_lib/domain-whitelist.js`, exact
-   match only). A hit returns `"safe"` immediately, with no Web Risk
-   call and no heuristic/infrastructure analysis at all.
+   match only). A hit returns `"safe"` immediately, with no
+   heuristic/infrastructure analysis and no *wait* on Web Risk — a
+   sampled fraction of these still trigger a fire-and-forget Web Risk
+   check in the background afterward, purely as a safety net (see
+   `api/_lib/DOMAIN_WHITELIST.md`).
 5. Otherwise, starts the Google Web Risk lookup and the
    DNS/infrastructure analysis (`api/_lib/infrastructure.js`)
    concurrently.

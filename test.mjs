@@ -1,4 +1,4 @@
-import handler, { __setRatelimiterForTests, heuristicAnalysis } from './api/check-link.js';
+import handler, { __setRatelimiterForTests, heuristicAnalysis, __getLastWhitelistBackgroundWorkForTests } from './api/check-link.js';
 import statsHandler from './api/stats.js';
 import { __setRedisForTests } from './api/_lib/redis.js';
 import { infrastructureAnalysis, __setDnsForTests, __setRdapFetchForTests } from './api/_lib/infrastructure.js';
@@ -99,6 +99,12 @@ function makeFakeRedis() {
 
 async function run() {
   process.env.GOOGLE_API_KEY = 'test-key-123';
+  // Deterministic by default: the whitelist safety-net's background Web
+  // Risk check is sampled (see whitelistWebRiskSampleRate() in
+  // check-link.js), so leaving this unset would make every whitelist test
+  // below flaky. Whitelist-safety-net-specific tests further down force
+  // this to '1' and restore it to '0' afterward.
+  process.env.WHITELIST_WEBRISK_SAMPLE_RATE = '0';
   // No live DNS/RDAP calls for the existing test suite -- see makeFakeDns
   // above. Infra-specific tests further down install their own overrides
   // and restore this default afterwards.
@@ -719,9 +725,10 @@ async function run() {
   }
 
   // --- 47. Domain whitelist: a listed domain gets "safe" immediately,
-  // and Google Web Risk is never actually called for it (not just a
-  // "safe" verdict that happens to match -- the API call itself must not
-  // happen, per the whole point of the fast path) ---
+  // and (with the background safety-net check unsampled, per this run's
+  // WHITELIST_WEBRISK_SAMPLE_RATE='0' default) Google Web Risk is not
+  // called for it at all -- see tests 51-54 below for the sampled
+  // safety-net behavior itself ---
   {
     const fetchSpy = spyFetch(async () => { throw new Error('Web Risk should not have been called'); });
     global.fetch = fetchSpy;
@@ -783,6 +790,97 @@ async function run() {
     check('whitelist match is case-insensitive', getWhitelistEntry('LEUMI.CO.IL') !== null);
     check('unknown domain -> null, not a thrown error', getWhitelistEntry('not-a-real-domain-xyz.example') === null);
     check('empty/undefined hostname -> null, not a thrown error', getWhitelistEntry('') === null && getWhitelistEntry(undefined) === null);
+  }
+
+  // --- 51. Whitelist safety net: the immediate "safe" response never
+  // waits on the background Web Risk check, even when that check is
+  // guaranteed to run (sample rate forced to 1) and Web Risk itself hangs
+  // forever -- same race-pattern proof as tests 45/46, applied to the new
+  // background path ---
+  {
+    process.env.WHITELIST_WEBRISK_SAMPLE_RATE = '1';
+    const hang = new Promise(() => {}); // never settles
+    global.fetch = async (url, opts) => {
+      if (opts && opts.method === 'HEAD') return { status: 200, headers: { get: () => null } };
+      return hang; // the Web Risk GET call itself hangs
+    };
+    const res = mockRes();
+    const t0 = Date.now();
+    await handler({ method: 'POST', body: { link: 'https://leumi.co.il/some/page' } }, res);
+    const elapsedMs = Date.now() - t0;
+    check('whitelist safety net: response returns fast, does not wait on hanging background Web Risk', elapsedMs < 300, elapsedMs);
+    check('whitelist safety net: status is still safe', res._json.status === 'safe', res._json);
+    process.env.WHITELIST_WEBRISK_SAMPLE_RATE = '0';
+  }
+
+  // --- 52. Whitelist safety net: Web Risk genuinely IS called in the
+  // background for a whitelisted domain when sampled (not just "the
+  // response says safe" -- the actual network call must happen) ---
+  {
+    process.env.WHITELIST_WEBRISK_SAMPLE_RATE = '1';
+    const fetchSpy = spyFetch(async () => ({ ok: true, json: async () => ({}) }));
+    global.fetch = fetchSpy;
+    const res = mockRes();
+    await handler({ method: 'POST', body: { link: 'https://leumi.co.il/some/page' } }, res);
+    check('whitelist safety net: user-facing response is still immediate/safe', res._json.status === 'safe', res._json);
+    const backgroundWork = __getLastWhitelistBackgroundWorkForTests();
+    check('whitelist safety net: a background check was actually scheduled', backgroundWork !== null);
+    await backgroundWork; // let the background check actually finish before asserting on it
+    check('whitelist safety net: Web Risk endpoint WAS called in the background', fetchSpy.calls.some((c) => c.url.includes('webrisk.googleapis.com')), fetchSpy.calls);
+    process.env.WHITELIST_WEBRISK_SAMPLE_RATE = '0';
+  }
+
+  // --- 53. Whitelist safety net: if the background Web Risk check comes
+  // back "danger" for a whitelisted domain, a high-severity warning log
+  // fires (naming the domain, what Web Risk returned, and when) -- but
+  // the response already sent to the user is untouched (no retroactive
+  // push exists, or could exist, in this request/response architecture) ---
+  {
+    process.env.WHITELIST_WEBRISK_SAMPLE_RATE = '1';
+    global.fetch = spyFetch(async () => ({ ok: true, json: async () => ({ threat: { threatTypes: ['SOCIAL_ENGINEERING'] } }) }));
+    const originalConsoleError = console.error;
+    const errorCalls = [];
+    console.error = (...args) => { errorCalls.push(args); };
+    const res = mockRes();
+    try {
+      await handler({ method: 'POST', body: { link: 'https://leumi.co.il/some/page' } }, res);
+      check('whitelist safety net: response already sent stays "safe" regardless of what the background check later finds', res._json.status === 'safe', res._json);
+      const backgroundWork = __getLastWhitelistBackgroundWorkForTests();
+      await backgroundWork;
+      const alertCall = errorCalls.find((args) => typeof args[0] === 'string' && args[0].includes('[WHITELIST SAFETY NET]'));
+      check('whitelist safety net: a high-severity warning was logged', !!alertCall, errorCalls);
+      if (alertCall) {
+        const logged = JSON.parse(alertCall[1]);
+        check('whitelist safety net: warning names the flagged domain', logged.domain === 'leumi.co.il', logged);
+        check('whitelist safety net: warning includes what Web Risk returned', typeof logged.webRiskDetails === 'string' && logged.webRiskDetails.length > 0, logged);
+        check('whitelist safety net: warning includes a timestamp', typeof logged.at === 'string' && !isNaN(Date.parse(logged.at)), logged);
+      }
+    } finally {
+      console.error = originalConsoleError;
+      process.env.WHITELIST_WEBRISK_SAMPLE_RATE = '0';
+    }
+  }
+
+  // --- 54. Whitelist safety net: sampling actually takes effect -- at
+  // rate=0 (this suite's default) no background check is scheduled at
+  // all and Web Risk is never reached, contrasted directly against
+  // rate=1 where it reliably is ---
+  {
+    process.env.WHITELIST_WEBRISK_SAMPLE_RATE = '1';
+    global.fetch = spyFetch(async () => ({ ok: true, json: async () => ({}) }));
+    const res1 = mockRes();
+    await handler({ method: 'POST', body: { link: 'https://leumi.co.il/marker-page' } }, res1);
+    const markerWork = __getLastWhitelistBackgroundWorkForTests();
+    check('sampling sanity check: rate=1 schedules a background check', markerWork !== null);
+    await markerWork;
+
+    process.env.WHITELIST_WEBRISK_SAMPLE_RATE = '0';
+    const fetchSpy2 = spyFetch(async () => { throw new Error('Web Risk should not have been called at rate=0'); });
+    global.fetch = fetchSpy2;
+    const res2 = mockRes();
+    await handler({ method: 'POST', body: { link: 'https://leumi.co.il/another-page' } }, res2);
+    check('sampling: rate=0 -> no new background check scheduled', __getLastWhitelistBackgroundWorkForTests() === markerWork);
+    check('sampling: rate=0 -> Web Risk not called', !fetchSpy2.calls.some((c) => c.url.includes('webrisk.googleapis.com')), fetchSpy2.calls);
   }
 
   console.log('\n' + pass + ' passed, ' + fail + ' failed');

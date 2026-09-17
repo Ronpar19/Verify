@@ -4,15 +4,20 @@
 official Israeli domains (banks, health funds, insurers, telecoms, government
 bodies, shipping/logistics, ...). It is consulted by `api/check-link.js`
 *before* Google Web Risk is called — a domain on this list gets an immediate
-`safe` verdict, and Web Risk is not queried at all for that request.
+`safe` verdict, with no wait on Web Risk at all. (Web Risk is still checked
+for these domains, in the background, as a safety net — see "Safety net:
+Web Risk still runs, just not in the critical path" below. It's just never
+awaited before the user gets their answer.)
 
 ## Why this is worth having a separate, stronger fast path
 
 These are exactly the domains phishing campaigns impersonate most (bank
 logins, health-fund portals, government tax/benefits sites). A manually
 verified exact match on one of them is a stronger, more specific signal than
-a generic Web Risk "not on any known threat list" — and it also saves the
-Web Risk API call entirely (relevant given the free-tier quota).
+a generic Web Risk "not on any known threat list" — and responding
+immediately, without waiting on Web Risk's network round-trip, is a
+meaningful latency win for the single most common case this app sees (a
+real bank/gov/insurer link, not a phishing one).
 
 ## How it was built (last full pass: 2026-09-17)
 
@@ -67,16 +72,81 @@ This is deliberately stricter than the existing `KNOWN_SAFE_DOMAINS` list in
 that list only nudges the heuristic's score, while this one fully bypasses
 Web Risk, so it needs a tighter guarantee.
 
-## The tradeoff this creates — read before adding a domain
+## Safety net: Web Risk still runs, just not in the critical path
 
-Skipping Web Risk entirely for a whitelisted domain means Web Risk never
-gets a chance to flag that domain if it were ever compromised (e.g. a real
-bank's site serving injected malware) or added to a threat list after the
-fact. This list should stay limited to registrable domains of real
-organizations that are not attacker-controllable — never a URL shortener,
-a redirect service, a UGC platform (forums, `blogspot.com`-style hosting),
-or anything else where a bad actor could get a link approved on the
-organization's own domain.
+Earlier versions of this list skipped Web Risk *entirely* for a whitelisted
+domain. That had a real gap: Web Risk would never get a chance to flag one
+of these domains if it were ever compromised (e.g. a real bank's site
+serving injected malware) or added to a threat list after the fact.
+
+`backgroundVerifyWhitelistedDomain()` in `api/check-link.js` closes most of
+that gap without giving up the latency win:
+
+- The user-facing response is still immediate and never waits on Web
+  Risk — `sendVerdict()` is called, and only *then* is the background
+  check kicked off (fire-and-forget, via `waitUntil` from
+  `@vercel/functions` so the check actually gets to finish instead of
+  racing the function instance freezing).
+- Web Risk is queried on the exact same `finalUrl` that would have been
+  checked on the normal path.
+- **It is sampled, not run on every request** (`WHITELIST_WEBRISK_SAMPLE_RATE`,
+  default 10%) — see "Why sampled, not every request" below.
+- If that background check comes back `danger`, there is **no retroactive
+  fix**: the user already has their answer, and this architecture has no
+  mechanism to reach back and change a response already sent. What it
+  *does* do is log a high-severity, greppable line
+  (`[WHITELIST SAFETY NET] ...`, via `console.error` — see "Where the
+  warning goes" below) naming the domain, what Web Risk returned, and
+  when. **This is a signal for a human to investigate and decide whether
+  the entry needs to come out of the list — the code itself never removes
+  anything automatically.** A false positive from Web Risk is possible;
+  a domain that's actually been compromised needs a real incident
+  response, not a silent auto-removal that a bot could potentially
+  trigger by feeding Web Risk something misleading.
+
+This list should still stay limited to registrable domains of real
+organizations that are not attacker-controllable — never a URL shortener, a
+redirect service, a UGC platform (forums, `blogspot.com`-style hosting), or
+anything else where a bad actor could get a link approved on the
+organization's own domain. The safety net reduces the cost of a mistake
+here; it doesn't replace picking the right domains in the first place.
+
+### Why sampled, not every request
+
+Whitelisted domains are, almost by definition, the *highest-traffic
+legitimate* links this app sees — a real bank/gov/insurer link gets pasted
+into the checker far more often than a phishing one. Running the safety-net
+check on every single one of those requests would roughly double this
+project's Web Risk call volume, spent entirely on a check whose premise is
+"this basically never finds anything." That's a meaningful, avoidable bite
+out of the free-tier quota. Sampling a fraction of requests
+(`WHITELIST_WEBRISK_SAMPLE_RATE`, default `0.1`) keeps steady statistical
+coverage over time — a compromise that persists for any real length of time
+will still get caught, just not necessarily on the very first request after
+it starts — at a bounded, predictable cost. Tune it via that env var
+without a code change; `1` (check every request) or `0` (disable the safety
+net entirely) are both valid values if you want to trade cost for
+detection speed differently.
+
+This sampling decision is entirely separate from, and doesn't interact
+with, the existing per-IP rate limiter (`RATE_LIMIT_MAX`/`RATE_LIMIT_WINDOW`
+in `check-link.js`, backed by Upstash Redis) — that limiter protects
+against one client hammering the public endpoint; this is an internal
+decision about how often *our own* backend calls out to Web Risk for a
+category of request that already got its answer.
+
+### Where the warning goes
+
+This project has no dedicated alerting/monitoring service wired in today —
+no Sentry, no external webhook, nothing beyond Vercel's own log viewer. So
+`console.error` with a distinctive, greppable prefix
+(`[WHITELIST SAFETY NET]`) *is* the alerting mechanism right now: it lands
+in Vercel's logs under the "Error" severity level, where it's filterable
+and (if you set one up) can back a Vercel Log Drain or a simple "alert on
+any Error-level log matching this prefix" rule. If this project ever adds
+real monitoring (Sentry, a Slack/webhook alert, etc.), this is the exact
+call site to also report to it — the log line already carries everything
+needed (`domain`, `name`, `finalUrl`, `webRiskDetails`, `at`).
 
 ## How to add or remove a domain
 
