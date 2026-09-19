@@ -286,7 +286,57 @@ const PRIVATE_HOST_PATTERNS = [
 
 const SHORTENERS = ['bit.ly','tinyurl.com','t.co','goo.gl','ow.ly','is.gd','buff.ly','rebrand.ly','cutt.ly','shorte.st','tiny.cc','rb.gy','shorturl.at','t.ly'];
 const SUSPICIOUS_TLDS = ['.tk','.ml','.ga','.cf','.gq','.xyz','.top','.click','.work','.loan','.win','.rest'];
-const KNOWN_SAFE_DOMAINS = ['google.com','facebook.com','amazon.com','apple.com','microsoft.com','netflix.com','paypal.com','instagram.com','whatsapp.com','youtube.com','wikipedia.org','gov.il'];
+const GLOBAL_SAFE_DOMAINS = ['google.com','facebook.com','amazon.com','apple.com','microsoft.com','netflix.com','paypal.com','instagram.com','whatsapp.com','youtube.com','wikipedia.org'];
+
+// Israeli banks, credit-card/clearing companies, health funds, insurers,
+// telecoms, logistics carriers, transport operators and government bodies —
+// common phishing targets, curated from a verified domain list. 'gov.il' on
+// its own already covers every *.gov.il subdomain (data.gov.il, btl.gov.il,
+// ...), so those are intentionally not listed individually.
+const ISRAELI_SAFE_DOMAINS = [
+  'gov.il',
+  // Banks
+  'leumi.co.il','bankhapoalim.co.il','hapoalim.co.il','discountbank.co.il',
+  'mizrahi-tefahot.co.il','fibi.co.il','bank-yahav.co.il','bankjerusalem.co.il',
+  'massad.co.il','bankmassad.co.il','mercantile.co.il','onezero.co.il',
+  'onezerobank.com','esh.com','ubank.co.il','israelpost.co.il','boi.org.il',
+  'bankotsar.co.il','pepper.co.il','barclays.com','hsbc.co.il','sbi.co.in','bank.sbi',
+  // Credit cards & clearing
+  'isracard.co.il','digital.isracard.co.il','cal-online.co.il','max.co.il',
+  'diners.co.il','americanexpress.co.il','tranzila.com','cardcom.solutions',
+  'cardcom.co.il','shva.co.il','masav.co.il',
+  // Health funds
+  'clalit.co.il','maccabi4u.co.il','meuhedet.co.il','leumit.co.il',
+  // Insurance
+  'harel-group.co.il','fnx.co.il','migdal.co.il','menoramivt.co.il',
+  'ayalon-ins.co.il','shlomo-bit.co.il','aig.co.il','we-sure.co.il',
+  'shomera.co.il','bth.co.il',
+  // Telecom
+  'cellcom.co.il','partner.co.il','pelephone.co.il','hotmobile.co.il',
+  '019mobile.co.il','wecom.co.il','golantelecom.co.il','rami-levy.co.il',
+  'bezeq.co.il','hot.net.il','yes.co.il',
+  // Shipping & logistics
+  'chitadelivery.co.il','cheetah-shops.co.il','hfd.co.il','e-post.co.il',
+  'epost.co.il','cargo.co.il','tapuzdelivery.co.il','tapuzdelivery.com',
+  'bar-ltd.co.il','boxit.co.il','dhl.co.il','dhl.com','ups.com','fedex.com',
+  'orian.com','flyingcargo.com','gaashwd.com','gcx.co.il','ushops.co.il',
+  'getpackage.com','getexpress.co.il','dealdelivery.co.il','delivery.yango.com',
+  'wolt.com','d2d.co.il','fritz.co.il','pickpack.co.il','zig-zag.co.il',
+  'downtown.co.il','ydm.co.il','nonstopb.co.il','amagon.co.il','gett.com',
+  // Transportation
+  'ravkavonline.co.il','pti.org.il','ayalonhw.co.il','kvish6.co.il',
+  'egged.co.il','dan.co.il','metropoline.com','kavim-t.com','nateevexpress.com',
+  // Aviation
+  'israir.co.il','arkia.co.il','elal.com',
+  // Energy
+  'iec.co.il','pazgas.co.il','supergas.co.il','amisragas.co.il',
+  // Retail & price comparison
+  'shufersal.co.il','victory.co.il','osherad.co.il','zap.co.il','wisebuy.co.il',
+  // Other government / public bodies
+  'idf.il','clalbit.co.il',
+];
+
+const KNOWN_SAFE_DOMAINS = [...GLOBAL_SAFE_DOMAINS, ...ISRAELI_SAFE_DOMAINS];
 const BRAND_KEYWORDS = ['paypal','amazon','microsoft','apple','google','facebook','netflix','bituach','bank','leumi','hapoalim','discount','mizrahi','postil','paybox'];
 const URGENT_WORDS = ['verify','confirm','update','secure','suspended','urgent','login','password','account'];
 
@@ -537,6 +587,22 @@ export default async function handler(req, res) {
     return sendVerdict(req, res, 'danger', m.heuristicDangerPrefix + combinedReasons.join('; '));
   }
 
+  // Israeli (.il) sites: the local heuristic runs exactly the same as for
+  // any other link (nothing here skips it), but it's tuned on global
+  // patterns and routinely fires mild, generic signals on smaller/older
+  // Israeli business sites (plain http, a bank/insurer name that happens to
+  // match a BRAND_KEYWORDS entry without being in KNOWN_SAFE_DOMAINS, etc.).
+  // Once Web Risk's authoritative known-threat lists come back clean and
+  // there's no actual smoking-gun pattern (highConfidence, already ruled
+  // out above), don't let that generic noise downgrade the result to
+  // "can't determine" — give a real "safe" answer instead. A genuinely
+  // dangerous .il link is still caught: either Web Risk flags it (handled
+  // earlier) or the heuristic finds a highConfidence pattern (handled just
+  // above), neither of which this bypasses.
+  if (isIsraeliDomain(safeHostname(finalUrl))) {
+    return sendVerdict(req, res, 'safe', webRiskResult.details);
+  }
+
   // Everything else: Web Risk found nothing on its lists, and neither the
   // URL's own structure nor its infrastructure is a smoking gun — don't
   // hand out false confidence, but don't cry "danger" on a legitimate
@@ -554,6 +620,15 @@ function safeHostname(urlString) {
 
 function isPrivateHost(hostname) {
   return PRIVATE_HOST_PATTERNS.some((re) => re.test(hostname));
+}
+
+// True for any hostname under Israel's ccTLD (.il itself, or any label
+// under it: .co.il, .org.il, .gov.il, .net.il, .ac.il, ...). A literal dot
+// immediately before the trailing "il" is required, so this can't false-
+// match an unrelated domain that merely ends in the letters "il" (e.g.
+// "devil.com" ends in "com", not ".il").
+function isIsraeliDomain(hostname) {
+  return typeof hostname === 'string' && /\.il$/i.test(hostname);
 }
 
 async function fetchWithTimeout(url, options) {
