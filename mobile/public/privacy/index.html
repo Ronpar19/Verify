@@ -52,22 +52,40 @@
         color: var(--text-secondary);
         font-size: 13px;
       }
-      .lang-notice {
-        margin: 14px 0 0;
-        font-size: 12px;
-        color: #8A6A2E;
-        background: #FDF3E3;
-        border: 1px solid #F3E1B8;
-        border-radius: 10px;
-        padding: 10px 14px;
+      .lang-switch {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 8px;
+        margin: 16px 0 0;
         direction: ltr;
-        text-align: center;
+      }
+      .lang-switch button {
+        appearance: none;
+        border: 1px solid var(--border);
+        background: var(--surface);
+        color: var(--text);
+        font-size: 12.5px;
+        font-weight: 600;
+        border-radius: 999px;
+        padding: 6px 12px;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        font-family: inherit;
+      }
+      .lang-switch button[aria-pressed="true"] {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
       }
       .card {
         background: var(--surface);
         border: 1px solid var(--border);
         border-radius: 18px;
         padding: 26px 24px;
+        margin-top: 20px;
       }
       .card p {
         margin: 0 0 14px;
@@ -103,73 +121,330 @@
     <main>
       <div class="header">
         <img class="logo" src="/icon-512.png" alt="Verify" />
-        <h1>מדיניות פרטיות — Verify (בדיקת קישורים)</h1>
-        <p class="updated">עודכן לאחרונה: 22/08/2026</p>
-        <p class="lang-notice">This privacy policy is currently available in Hebrew only.</p>
+        <h1 id="pp-title">מדיניות פרטיות — Verify (בדיקת קישורים)</h1>
+        <p class="updated" id="pp-updated">עודכן לאחרונה: 22/08/2026</p>
+        <div class="lang-switch" id="pp-lang-switch" role="group" aria-label="Language / שפה"></div>
       </div>
 
-      <div class="card">
-        <p>
-          אפליקציית Verify עוזרת לך לבדוק אם קישור שקיבלת עשוי להיות מסוכן
-          (פישינג, תוכנה זדונית). מדיניות זו מסבירה אילו נתונים האפליקציה
-          מעבירה, לאן, ולמה.
-        </p>
+      <div class="card" id="pp-card"></div>
 
-        <h2>מה קורה כשאתה בודק קישור</h2>
-        <p>
-          כשאתה מדביק קישור ולוחץ לבדיקה, הכתובת (URL) שהזנת נשלחת משרתי
-          האפליקציה אל שירות Google Web Risk, כדי לבדוק אם הכתובת מופיעה
-          ברשימות איומים ידועות של גוגל. זהו שימוש הכרחי לתפקוד הבסיסי של
-          האפליקציה — אי אפשר לבדוק קישור מבלי לשלוח את הכתובת לבדיקה.
-          הכתובות שאתה בודק אינן נשמרות באופן קבוע במסד נתונים של האפליקציה.
-          ייתכן שרישומי הפעלה זמניים (server logs) של ספק האחסון (Vercel)
-          יכללו אותן לצורך תחזוקה ואבחון תקלות בלבד, לפרק זמן מוגבל.
-        </p>
-
-        <h2>גישה ללוח (Clipboard)</h2>
-        <p>
-          האפליקציה קוראת את תוכן הלוח (clipboard) רק כאשר אתה לוחץ בעצמך על
-          כפתור "הדבקה אוטומטית". האפליקציה אינה קוראת את הלוח באופן אוטומטי
-          או ברקע, ואינה קוראת הודעות SMS — לאף אפליקציה אין גישה כזו במכשירים
-          מודרניים, וזה לא מתבקש ולא נעשה כאן.
-        </p>
-
-        <h2>מידע שאנו לא אוספים</h2>
-        <p>
-          האפליקציה אינה דורשת הרשמה או חשבון משתמש, אינה אוספת שם, אימייל,
-          או מספר טלפון, ואינה מציגה פרסומות.
-        </p>
-
-        <h2>שיתוף עם צדדים שלישיים</h2>
-        <p>
-          הכתובת שאתה בודק משותפת עם Google (שירות Web Risk API), לצורך
-          הבדיקה בלבד. לפרטים על האופן שבו גוגל מטפלת בנתונים אלה, ראו את
-          מדיניות הפרטיות של גוגל:
-          <a href="https://policies.google.com/privacy" target="_blank" rel="noopener">policies.google.com/privacy</a>.
-          אנו לא מוכרים ולא משתפים מידע עם גורמים נוספים למטרות שיווק.
-        </p>
-
-        <h2>ילדים</h2>
-        <p>
-          האפליקציה אינה מיועדת לילדים מתחת לגיל 13, ואיננו אוספים ביודעין
-          מידע מילדים בגיל זה.
-        </p>
-
-        <h2>שינויים במדיניות זו</h2>
-        <p>
-          אם נשנה את האופן שבו האפליקציה אוספת או משתמשת במידע (למשל הוספת
-          נתוני שימוש אנונימיים בעתיד), נעדכן מסמך זה ואת התאריך שלמעלה.
-        </p>
-
-        <h2>יצירת קשר</h2>
-        <p>
-          שאלות לגבי מדיניות זו ניתן לשלוח אל:
-          <a href="mailto:ronpar19@gmail.com">ronpar19@gmail.com</a>
-        </p>
-      </div>
-
-      <a class="back" href="/">חזרה לאפליקציה</a>
-      <footer>כלי עזר בלבד ואינו מבטיח דיוק מוחלט — היו זהירים תמיד</footer>
+      <a class="back" href="/" id="pp-back">חזרה לאפליקציה</a>
+      <footer id="pp-footer">כלי עזר בלבד ואינו מבטיח דיוק מוחלט — היו זהירים תמיד</footer>
     </main>
+
+    <script>
+      // Mirrors mobile/translations.js: same languages, same fallback
+      // logic (default to Hebrew when the browser locale isn't supported),
+      // kept in sync by hand since this is a static page outside the app bundle.
+      var LANGUAGES = [
+        { code: 'he', name: 'עברית', flag: '🇮🇱', rtl: true },
+        { code: 'en', name: 'English', flag: '🇺🇸', rtl: false },
+        { code: 'ru', name: 'Русский', flag: '🇷🇺', rtl: false },
+        { code: 'fr', name: 'Français', flag: '🇫🇷', rtl: false },
+        { code: 'ar', name: 'العربية', flag: '🇸🇦', rtl: true },
+      ];
+      var DEFAULT_LANGUAGE = 'he';
+      var STORAGE_KEY = 'verify_privacy_lang';
+      var UPDATED_DATE = '22/08/2026';
+      var CONTACT_EMAIL = 'ronpar19@gmail.com';
+      var GOOGLE_PRIVACY_URL = 'https://policies.google.com/privacy';
+
+      var STRINGS = {
+        he: {
+          pageTitle: 'Verify — מדיניות פרטיות',
+          metaDescription: 'מדיניות הפרטיות של אפליקציית Verify — בדיקת קישורים.',
+          h1: 'מדיניות פרטיות — Verify (בדיקת קישורים)',
+          updatedLabel: function (d) { return 'עודכן לאחרונה: ' + d; },
+          intro: 'אפליקציית Verify עוזרת לך לבדוק אם קישור שקיבלת עשוי להיות מסוכן (פישינג, תוכנה זדונית). מדיניות זו מסבירה אילו נתונים האפליקציה מעבירה, לאן, ולמה.',
+          sections: [
+            {
+              h: 'מה קורה כשאתה בודק קישור',
+              p: 'כשאתה מדביק קישור ולוחץ לבדיקה, הכתובת (URL) שהזנת נשלחת משרתי האפליקציה אל שירות Google Web Risk, כדי לבדוק אם הכתובת מופיעה ברשימות איומים ידועות של גוגל. זהו שימוש הכרחי לתפקוד הבסיסי של האפליקציה — אי אפשר לבדוק קישור מבלי לשלוח את הכתובת לבדיקה. הכתובות שאתה בודק אינן נשמרות באופן קבוע במסד נתונים של האפליקציה. ייתכן שרישומי הפעלה זמניים (server logs) של ספק האחסון (Vercel) יכללו אותן לצורך תחזוקה ואבחון תקלות בלבד, לפרק זמן מוגבל.',
+            },
+            {
+              h: 'גישה ללוח (Clipboard)',
+              p: 'האפליקציה קוראת את תוכן הלוח (clipboard) רק כאשר אתה לוחץ בעצמך על כפתור "הדבקה אוטומטית". האפליקציה אינה קוראת את הלוח באופן אוטומטי או ברקע, ואינה קוראת הודעות SMS — לאף אפליקציה אין גישה כזו במכשירים מודרניים, וזה לא מתבקש ולא נעשה כאן.',
+            },
+            {
+              h: 'מידע שאנו לא אוספים',
+              p: 'האפליקציה אינה דורשת הרשמה או חשבון משתמש, אינה אוספת שם, אימייל, או מספר טלפון, ואינה מציגה פרסומות.',
+            },
+            {
+              h: 'שיתוף עם צדדים שלישיים',
+              pHtml: function () {
+                return 'הכתובת שאתה בודק משותפת עם Google (שירות Web Risk API), לצורך הבדיקה בלבד. לפרטים על האופן שבו גוגל מטפלת בנתונים אלה, ראו את מדיניות הפרטיות של גוגל: <a href="' + GOOGLE_PRIVACY_URL + '" target="_blank" rel="noopener">policies.google.com/privacy</a>. אנו לא מוכרים ולא משתפים מידע עם גורמים נוספים למטרות שיווק.';
+              },
+            },
+            {
+              h: 'ילדים',
+              p: 'האפליקציה אינה מיועדת לילדים מתחת לגיל 13, ואיננו אוספים ביודעין מידע מילדים בגיל זה.',
+            },
+            {
+              h: 'שינויים במדיניות זו',
+              p: 'אם נשנה את האופן שבו האפליקציה אוספת או משתמשת במידע (למשל הוספת נתוני שימוש אנונימיים בעתיד), נעדכן מסמך זה ואת התאריך שלמעלה.',
+            },
+            {
+              h: 'יצירת קשר',
+              pHtml: function () {
+                return 'שאלות לגבי מדיניות זו ניתן לשלוח אל: <a href="mailto:' + CONTACT_EMAIL + '">' + CONTACT_EMAIL + '</a>';
+              },
+            },
+          ],
+          back: 'חזרה לאפליקציה',
+          footer: 'כלי עזר בלבד ואינו מבטיח דיוק מוחלט — היו זהירים תמיד',
+        },
+        en: {
+          pageTitle: 'Verify — Privacy Policy',
+          metaDescription: 'Privacy policy for the Verify app — link checker.',
+          h1: 'Privacy Policy — Verify (Link Checker)',
+          updatedLabel: function (d) { return 'Last updated: ' + d; },
+          intro: 'The Verify app helps you check whether a link you received might be dangerous (phishing, malware). This policy explains what data the app transmits, where, and why.',
+          sections: [
+            {
+              h: 'What happens when you check a link',
+              p: "When you paste a link and tap to check it, the URL you entered is sent from the app's servers to Google's Web Risk service, to check whether the address appears on Google's known threat lists. This is necessary for the app's basic functionality — a link cannot be checked without sending its address for review. The addresses you check are not permanently stored in the app's database. Temporary server logs kept by the hosting provider (Vercel) may include them for maintenance and troubleshooting purposes only, for a limited period of time.",
+            },
+            {
+              h: 'Clipboard access',
+              p: 'The app reads the clipboard’s contents only when you yourself tap the "Auto-paste" button. The app does not read the clipboard automatically or in the background, and does not read SMS messages — no app has that kind of access on modern devices, and this app neither requests it nor attempts it.',
+            },
+            {
+              h: 'Information we do not collect',
+              p: 'The app does not require registration or a user account, does not collect your name, email address, or phone number, and does not display advertisements.',
+            },
+            {
+              h: 'Sharing with third parties',
+              pHtml: function () {
+                return 'The address you check is shared with Google (Web Risk API service), for the purpose of the check only. For details on how Google handles this data, see Google’s privacy policy: <a href="' + GOOGLE_PRIVACY_URL + '" target="_blank" rel="noopener">policies.google.com/privacy</a>. We do not sell information or share it with any other party for marketing purposes.';
+              },
+            },
+            {
+              h: 'Children',
+              p: 'The app is not intended for children under the age of 13, and we do not knowingly collect information from children of this age.',
+            },
+            {
+              h: 'Changes to this policy',
+              p: 'If we change how the app collects or uses information (for example, adding anonymous usage data in the future), we will update this document and the date above.',
+            },
+            {
+              h: 'Contact us',
+              pHtml: function () {
+                return 'Questions about this policy can be sent to: <a href="mailto:' + CONTACT_EMAIL + '">' + CONTACT_EMAIL + '</a>';
+              },
+            },
+          ],
+          back: 'Back to the app',
+          footer: 'This is only a helper tool and accuracy is not guaranteed — always be careful',
+        },
+        ru: {
+          pageTitle: 'Verify — Политика конфиденциальности',
+          metaDescription: 'Политика конфиденциальности приложения Verify — проверка ссылок.',
+          h1: 'Политика конфиденциальности — Verify (проверка ссылок)',
+          updatedLabel: function (d) { return 'Последнее обновление: ' + d; },
+          intro: 'Приложение Verify помогает проверить, может ли полученная вами ссылка быть опасной (фишинг, вредоносное ПО). Эта политика объясняет, какие данные передаёт приложение, куда и зачем.',
+          sections: [
+            {
+              h: 'Что происходит при проверке ссылки',
+              p: 'Когда вы вставляете ссылку и нажимаете «Проверить», введённый вами URL-адрес отправляется с серверов приложения в сервис Google Web Risk, чтобы проверить, числится ли этот адрес в известных Google списках угроз. Это необходимо для базовой работы приложения — проверить ссылку без отправки её адреса невозможно. Проверяемые вами адреса не сохраняются постоянно в базе данных приложения. Временные журналы сервера (server logs) поставщика хостинга (Vercel) могут включать их исключительно в целях обслуживания и диагностики неполадок, в течение ограниченного периода времени.',
+            },
+            {
+              h: 'Доступ к буферу обмена',
+              p: 'Приложение считывает содержимое буфера обмена только тогда, когда вы сами нажимаете кнопку «Автовставка». Приложение не считывает буфер обмена автоматически или в фоновом режиме и не читает SMS-сообщения — ни одно приложение не имеет такого доступа на современных устройствах, и это приложение не запрашивает и не пытается его получить.',
+            },
+            {
+              h: 'Информация, которую мы не собираем',
+              p: 'Приложение не требует регистрации или учётной записи пользователя, не собирает имя, адрес электронной почты или номер телефона и не показывает рекламу.',
+            },
+            {
+              h: 'Передача данных третьим лицам',
+              pHtml: function () {
+                return 'Проверяемый вами адрес передаётся компании Google (сервис Web Risk API) исключительно с целью проверки. Подробную информацию о том, как Google обрабатывает эти данные, см. в политике конфиденциальности Google: <a href="' + GOOGLE_PRIVACY_URL + '" target="_blank" rel="noopener">policies.google.com/privacy</a>. Мы не продаём и не передаём информацию другим сторонам в маркетинговых целях.';
+              },
+            },
+            {
+              h: 'Дети',
+              p: 'Приложение не предназначено для детей младше 13 лет, и мы сознательно не собираем информацию от детей этого возраста.',
+            },
+            {
+              h: 'Изменения в этой политике',
+              p: 'Если мы изменим то, как приложение собирает или использует информацию (например, добавим анонимные данные об использовании в будущем), мы обновим этот документ и указанную выше дату.',
+            },
+            {
+              h: 'Связаться с нами',
+              pHtml: function () {
+                return 'Вопросы об этой политике можно направлять по адресу: <a href="mailto:' + CONTACT_EMAIL + '">' + CONTACT_EMAIL + '</a>';
+              },
+            },
+          ],
+          back: 'Назад в приложение',
+          footer: 'Это только вспомогательный инструмент, точность не гарантируется — всегда будьте осторожны',
+        },
+        fr: {
+          pageTitle: 'Verify — Politique de confidentialité',
+          metaDescription: "Politique de confidentialité de l'application Verify — vérificateur de liens.",
+          h1: 'Politique de confidentialité — Verify (vérificateur de liens)',
+          updatedLabel: function (d) { return 'Dernière mise à jour : ' + d; },
+          intro: "L'application Verify vous aide à vérifier si un lien que vous avez reçu peut être dangereux (hameçonnage, logiciel malveillant). Cette politique explique quelles données l'application transmet, où, et pourquoi.",
+          sections: [
+            {
+              h: 'Que se passe-t-il lorsque vous vérifiez un lien',
+              p: "Lorsque vous collez un lien et appuyez pour le vérifier, l'URL que vous avez saisie est envoyée depuis les serveurs de l'application au service Google Web Risk, afin de vérifier si cette adresse figure sur les listes de menaces connues de Google. Cet usage est nécessaire au fonctionnement de base de l'application — il est impossible de vérifier un lien sans envoyer son adresse pour analyse. Les adresses que vous vérifiez ne sont pas conservées de façon permanente dans la base de données de l'application. Il est possible que les journaux de serveur temporaires (server logs) du fournisseur d'hébergement (Vercel) les incluent, uniquement à des fins de maintenance et de diagnostic technique, pour une durée limitée.",
+            },
+            {
+              h: 'Accès au presse-papiers',
+              p: 'L’application lit le contenu du presse-papiers uniquement lorsque vous appuyez vous-même sur le bouton « Collage automatique ». L’application ne lit pas le presse-papiers automatiquement ou en arrière-plan, et ne lit pas les messages SMS — aucune application n’a ce type d’accès sur les appareils modernes, et ce n’est ni demandé ni effectué ici.',
+            },
+            {
+              h: 'Informations que nous ne collectons pas',
+              p: "L'application ne nécessite ni inscription ni compte utilisateur, ne collecte ni votre nom, ni votre adresse e-mail, ni votre numéro de téléphone, et n'affiche aucune publicité.",
+            },
+            {
+              h: 'Partage avec des tiers',
+              pHtml: function () {
+                return "L'adresse que vous vérifiez est partagée avec Google (service Web Risk API), uniquement aux fins de la vérification. Pour plus de détails sur la manière dont Google traite ces données, consultez la politique de confidentialité de Google : <a href=\"" + GOOGLE_PRIVACY_URL + '" target="_blank" rel="noopener">policies.google.com/privacy</a>. Nous ne vendons ni ne partageons d’informations avec d’autres tiers à des fins de marketing.';
+              },
+            },
+            {
+              h: 'Enfants',
+              p: "L'application n'est pas destinée aux enfants de moins de 13 ans, et nous ne collectons pas sciemment d'informations auprès d'enfants de cet âge.",
+            },
+            {
+              h: 'Modifications de cette politique',
+              p: "Si nous modifions la façon dont l'application collecte ou utilise les informations (par exemple, en ajoutant à l'avenir des données d'utilisation anonymes), nous mettrons à jour ce document ainsi que la date indiquée ci-dessus.",
+            },
+            {
+              h: 'Nous contacter',
+              pHtml: function () {
+                return 'Les questions concernant cette politique peuvent être envoyées à : <a href="mailto:' + CONTACT_EMAIL + '">' + CONTACT_EMAIL + '</a>';
+              },
+            },
+          ],
+          back: "Retour à l'application",
+          footer: "Ceci est seulement un outil d'aide et l'exactitude n'est pas garantie — soyez toujours prudent",
+        },
+        ar: {
+          pageTitle: 'Verify — سياسة الخصوصية',
+          metaDescription: 'سياسة الخصوصية لتطبيق Verify — أداة فحص الروابط.',
+          h1: 'سياسة الخصوصية — Verify (فحص الروابط)',
+          updatedLabel: function (d) { return 'آخر تحديث: ' + d; },
+          intro: 'يساعدك تطبيق Verify على التحقق مما إذا كان الرابط الذي تلقيته قد يكون خطيرًا (تصيّد احتيالي أو برامج ضارة). توضح هذه السياسة البيانات التي ينقلها التطبيق، إلى أين، ولماذا.',
+          sections: [
+            {
+              h: 'ماذا يحدث عند فحص رابط',
+              p: 'عندما تلصق رابطًا وتضغط لفحصه، يُرسَل عنوان الرابط (URL) الذي أدخلته من خوادم التطبيق إلى خدمة Google Web Risk، للتحقق مما إذا كان هذا العنوان مدرجًا في قوائم التهديدات المعروفة لدى Google. هذا الاستخدام ضروري لعمل التطبيق الأساسي — إذ لا يمكن فحص رابط دون إرسال عنوانه للفحص. الروابط التي تفحصها لا تُحفظ بشكل دائم في قاعدة بيانات التطبيق. من الممكن أن تتضمن سجلات الخادم المؤقتة (server logs) الخاصة بموفر الاستضافة (Vercel) هذه العناوين لأغراض الصيانة وتشخيص الأعطال فقط، ولفترة زمنية محدودة.',
+            },
+            {
+              h: 'الوصول إلى الحافظة (Clipboard)',
+              p: 'يقرأ التطبيق محتوى الحافظة فقط عندما تضغط أنت بنفسك على زر "اللصق التلقائي". لا يقرأ التطبيق الحافظة تلقائيًا أو في الخلفية، ولا يقرأ رسائل SMS — فلا يوجد لأي تطبيق مثل هذا الوصول على الأجهزة الحديثة، وهذا غير مطلوب وغير مُنفَّذ هنا.',
+            },
+            {
+              h: 'المعلومات التي لا نجمعها',
+              p: 'لا يتطلب التطبيق التسجيل أو إنشاء حساب مستخدم، ولا يجمع اسمك أو بريدك الإلكتروني أو رقم هاتفك، ولا يعرض أي إعلانات.',
+            },
+            {
+              h: 'المشاركة مع أطراف ثالثة',
+              pHtml: function () {
+                return 'يُشارَك عنوان الرابط الذي تفحصه مع Google (خدمة Web Risk API)، لغرض الفحص فقط. للاطلاع على تفاصيل كيفية تعامل Google مع هذه البيانات، راجع سياسة خصوصية Google: <a href="' + GOOGLE_PRIVACY_URL + '" target="_blank" rel="noopener">policies.google.com/privacy</a>. نحن لا نبيع ولا نشارك المعلومات مع أي جهة أخرى لأغراض تسويقية.';
+              },
+            },
+            {
+              h: 'الأطفال',
+              p: 'التطبيق غير موجّه للأطفال دون سن 13 عامًا، ولا نقوم عن علم بجمع معلومات من أطفال في هذا السن.',
+            },
+            {
+              h: 'التغييرات على هذه السياسة',
+              p: 'إذا غيّرنا طريقة جمع التطبيق للمعلومات أو استخدامه لها (مثل إضافة بيانات استخدام مجهولة الهوية مستقبلًا)، فسنقوم بتحديث هذا المستند والتاريخ المذكور أعلاه.',
+            },
+            {
+              h: 'التواصل معنا',
+              pHtml: function () {
+                return 'يمكن إرسال الأسئلة المتعلقة بهذه السياسة إلى: <a href="mailto:' + CONTACT_EMAIL + '">' + CONTACT_EMAIL + '</a>';
+              },
+            },
+          ],
+          back: 'العودة إلى التطبيق',
+          footer: 'هذه أداة مساعدة فقط ولا تضمن الدقة الكاملة — كن حذرًا دائمًا',
+        },
+      };
+
+      function isSupported(code) {
+        return LANGUAGES.some(function (l) { return l.code === code; });
+      }
+
+      function isRTL(code) {
+        var lang = LANGUAGES.filter(function (l) { return l.code === code; })[0];
+        return lang ? lang.rtl : false;
+      }
+
+      function getStoredLanguage() {
+        try {
+          var stored = window.localStorage.getItem(STORAGE_KEY);
+          if (stored && isSupported(stored)) return stored;
+        } catch (e) {}
+        return null;
+      }
+
+      function getBrowserDefaultLanguage() {
+        var locales = (navigator.languages && navigator.languages.length ? navigator.languages : [navigator.language]) || [];
+        for (var i = 0; i < locales.length; i++) {
+          var code = (locales[i] || '').slice(0, 2).toLowerCase();
+          if (isSupported(code)) return code;
+        }
+        return DEFAULT_LANGUAGE;
+      }
+
+      function render(lang) {
+        var s = STRINGS[lang];
+        var rtl = isRTL(lang);
+
+        document.documentElement.lang = lang;
+        document.documentElement.dir = rtl ? 'rtl' : 'ltr';
+        document.title = s.pageTitle;
+        document.querySelector('meta[name="description"]').setAttribute('content', s.metaDescription);
+
+        document.getElementById('pp-title').textContent = s.h1;
+        document.getElementById('pp-updated').textContent = s.updatedLabel(UPDATED_DATE);
+        document.getElementById('pp-back').textContent = s.back;
+        document.getElementById('pp-footer').textContent = s.footer;
+
+        var card = document.getElementById('pp-card');
+        card.innerHTML = '';
+
+        var intro = document.createElement('p');
+        intro.textContent = s.intro;
+        card.appendChild(intro);
+
+        s.sections.forEach(function (section) {
+          var h2 = document.createElement('h2');
+          h2.textContent = section.h;
+          card.appendChild(h2);
+
+          var p = document.createElement('p');
+          if (section.pHtml) {
+            p.innerHTML = section.pHtml();
+          } else {
+            p.textContent = section.p;
+          }
+          card.appendChild(p);
+        });
+
+        var switchEl = document.getElementById('pp-lang-switch');
+        switchEl.innerHTML = '';
+        LANGUAGES.forEach(function (l) {
+          var btn = document.createElement('button');
+          btn.type = 'button';
+          btn.setAttribute('aria-pressed', String(l.code === lang));
+          btn.setAttribute('lang', l.code);
+          btn.textContent = l.flag + ' ' + l.name;
+          btn.addEventListener('click', function () {
+            try { window.localStorage.setItem(STORAGE_KEY, l.code); } catch (e) {}
+            render(l.code);
+          });
+          switchEl.appendChild(btn);
+        });
+      }
+
+      render(getStoredLanguage() || getBrowserDefaultLanguage());
+    </script>
   </body>
 </html>
