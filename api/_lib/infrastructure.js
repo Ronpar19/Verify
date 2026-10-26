@@ -92,7 +92,9 @@ const INFRA_MESSAGES = {
 // ipaddr.js correctly folds in the tricky cases a hand-rolled regex tends
 // to miss -- IPv4-mapped IPv6 (::ffff:127.0.0.1 normalizes to loopback),
 // unique-local IPv6 (fc00::/7), link-local IPv6 (fe80::/10), etc.
-function isNonPublicIp(ipString) {
+// Exported because check-link.js's SSRF guard reuses it, so both layers
+// share one definition of "non-public".
+export function isNonPublicIp(ipString) {
   try {
     const addr = ipaddr.process(ipString); // process() also unwraps IPv4-mapped IPv6
     return addr.range() !== 'unicast';
