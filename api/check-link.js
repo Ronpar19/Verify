@@ -966,6 +966,18 @@ async function resolveFinalUrl(startUrl) {
   return { url: current, complete, rawIpUrl, visited };
 }
 
+function stripUserinfo(urlString) {
+  try {
+    const u = new URL(urlString);
+    if (!u.username && !u.password) return urlString;
+    u.username = '';
+    u.password = '';
+    return u.toString();
+  } catch (e) {
+    return urlString;
+  }
+}
+
 function hasUserinfo(urlString) {
   try {
     const u = new URL(urlString);
@@ -988,7 +1000,9 @@ async function checkWebRiskChain(urls, lang) {
     console.error('GOOGLE_API_KEY is not set in the environment');
     return null;
   }
-  const unique = [...new Set(urls)];
+  // Credentials in a URL ("user:pass@host") are the sender's, not part of
+  // what's being looked up -- never forward them to Google.
+  const unique = [...new Set(urls.map(stripUserinfo))];
   const results = await Promise.all(unique.map((u) => checkWebRisk(u, apiKey, lang).catch((err) => {
     console.error('check-link error (webrisk):', err);
     return null;
