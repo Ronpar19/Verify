@@ -511,7 +511,10 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
       });
     } catch (err) {
       if (timer) clearTimeout(timer);
-      return { status: 'error', errorKind: 'offline', details: '' };
+      // Our own timeout aborts with AbortError — the network may well be up,
+      // so say the server didn't answer rather than "no internet".
+      const kind = err && err.name === 'AbortError' ? 'server' : 'offline';
+      return { status: 'error', errorKind: kind, details: '' };
     }
 
     try {
@@ -1069,7 +1072,7 @@ const styles = StyleSheet.create({
   checkBtnInner: {
     minHeight: 52, alignItems: 'center', justifyContent: 'center', gap: 10,
   },
-  checkBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  checkBtnText: { color: '#fff', fontSize: 17, fontWeight: '700' },
   checkingHint: { marginTop: 14, fontSize: 13, color: COLORS.textSecondary, textAlign: 'center' },
   resultCard: {
     width: '100%', maxWidth: 420, marginTop: 18,
