@@ -30,7 +30,7 @@ check-ignore -v` על כל קובץ חשוד, לפני כל commit).
 ```
 [Expo app: PWA / APK / share-intent] --POST {link, lang}--> [Vercel /api/check-link]
                                                                      │
-                                                          resolve redirects (SSRF guard)
+                                                          resolve redirects (SSRF guard בזמן חיבור, בכל hop)
                                                                      │
                                           ┌──────────────────────────┼──────────────────────────┐
                                           ▼                          ▼                          ▼
@@ -64,7 +64,7 @@ Desktop\link-checker-vercel\              <- הבקאנד + שורש
 │       ├── redis.js                      <- לקוח Upstash Redis משותף
 │       ├── stats.js                      <- ספירת שימוש פרטית (בלי לשמור תוכן קישורים)
 │       └── infrastructure.js             <- שכבת DNS/RDAP (נוספה בשיחה אחרונה)
-├── test.mjs                               <- 130 טסטים לבקאנד (heuristic + infra + API)
+├── test.mjs                               <- 346 טסטים לבקאנד (heuristic + infra + SSRF + API)
 ├── package.json, README.md, vercel.json
 ├── DEPLOYMENT.md                          <- מדריך פריסה מלא צעד-אחר-צעד
 ├── .env.example, .gitignore
@@ -170,6 +170,11 @@ Desktop\link-checker-vercel\              <- הבקאנד + שורש
   + מילות דחיפות) מקבלים בונוס, **אך לעולם לא** מפעילים
   `highConfidence` — זו הייתה החלטה מפורשת כדי לשמור false positives
   נמוכים.
+- **פטור ‎.il לסימנים חלשים**: אם Web Risk נקי וכל הסימנים שנמצאו הם
+  מרשימה סגורה (http לא מוצפן, מילות דחיפות, URL מורכב, הרבה
+  תתי-דומיינים, מותג לבד, hostname שנראה אקראי), הקישור לא מקבל
+  "לא ודאי" בגללם. המטרה היא למנוע false positive על אתרים ישראליים
+  קטנים. כל סימן חזק יותר, או סימן חדש שיתווסף בעתיד, מבטל את הפטור.
 
 ### 3. DNS / Infrastructure layer (`api/_lib/infrastructure.js` — החדש ביותר)
 שכבה נפרדת ומודגשת בכוונה מה-heuristic, כי היא מבוססת על **תשתית
@@ -186,12 +191,14 @@ Desktop\link-checker-vercel\              <- הבקאנד + שורש
   Web Risk מחזיר "מסוכן" — התשובה חוזרת מיד, בלי להמתין ל-infra (שום
   infra signal לא יכול לשנות verdict סופי-כבר). אם לא — ה-handler
   ממתין לתוצאת ה-infra ומשלב אותה לציון אחד.
-- **TOCTOU / DNS rebinding — החלטה קריטית**: ה-resolve של שכבת ה-infra
-  **בלתי-תלוי** בחיבור בפועל שמבצע `resolveFinalUrl()` (שמשתמש
-  ב-`fetch()` ולא חושף IP). לכן IP פרטי שהתגלה **רק** דרך שכבת ה-infra
-  **לעולם לא** מפעיל `highConfidence` — רק ה-SSRF guard הקיים
-  ב-`resolveFinalUrl()` (שעוצר *לפני* חיבור בפועל, ערבות אמיתית) יכול
-  לעשות זאת.
+- **TOCTOU / DNS rebinding — החלטה קריטית**: `resolveFinalUrl()` עובד
+  עכשיו עם `node:http`/`node:https` ו-`lookup` משלנו. כל הכתובות של
+  ה-host נבדקות לפני פתיחת socket, ולכן אין חלון rebinding בחיבור
+  עצמו. ה-resolve של שכבת ה-infra עדיין **בלתי-תלוי** בחיבור הזה, ולכן
+  IP פרטי שהתגלה **רק** שם **לעולם לא** מפעיל `highConfidence`.
+  גם חסימה של ה-SSRF guard שנובעת מ-DNS (שם רגיל שמפנה לכתובת פרטית)
+  נותנת "לא ודאי" ולא "מסוכן" (החלטת הבעלים). רק IP פרטי שכתוב
+  מילולית בקישור או ב-Location מחייב "מסוכן".
 - **`.catch()` הגנתי**: ה-promise של ה-infra נשאר "תלוי באוויר"
   (unawaited) כשה-danger path מחזיר תשובה מיידית — נוסף `.catch()`
   מפורש כדי שרג'קשן עתידי לא יקרוס את ה-process (אומת: Node 24 קורס
@@ -224,8 +231,9 @@ Desktop\link-checker-vercel\              <- הבקאנד + שורש
 ---
 
 ## סטטוס טסטים
-- **בקאנד**: 130/130 (`node test.mjs` מהשורש) — כולל heuristic v2,
+- **בקאנד**: 346/346 (`node test.mjs` מהשורש) — כולל heuristic v2,
   שכבת ה-infra (עם DNS/RDAP מדומים, בלי קריאות רשת אמיתיות בטסטים),
+  SSRF guard בזמן חיבור בכל hop, תקציב הזמן של שרשרת ההפניות,
   ו-race pattern (מוודא ש-"danger" חוזר מהר בלי להמתין ל-infra תקוע).
 - **extractUrls**: 15/15 (`node test-extract-urls.mjs` מתוך `mobile\`).
 - **גרסת SDK**: Expo 54. תלויות עיקריות ב-mobile:
@@ -252,10 +260,13 @@ Desktop\link-checker-vercel\              <- הבקאנד + שורש
 - **רגישות גבוהה לעלויות** — כל המלצה כדאי שתוביל בבדיקת "האם זה
   חינמי/יש חלופה חינמית". דוגמה: `psl`/`punycode`/`ipaddr.js` נבחרו
   על פני `tldts` (כבד פי 4) ועל פני שירותי reputation מסחריים.
-- **`highConfidence` שמור אך ורק למקרים עם ערבות אמיתית** (private
-  IP/raw IP/`@` בזרימה הקיימת, או SSRF guard שעוצר *לפני* חיבור) —
-  שום שילוב של אותות חלשים, ואף לא IP פרטי שהתגלה ב-resolve עצמאי של
-  שכבת ה-infra, לא מפעיל אותו. false positive נמוך > כיסוי אגרסיבי.
+- **`highConfidence` שמור אך ורק למקרים עם ערבות אמיתית**: `@`
+  ב-userinfo, IP גולמי (בכל כתיב, IPv4/IPv6), או IP פרטי שכתוב
+  מילולית בקישור או ב-Location — בכל hop. חסימת SSRF שנובעת מ-DNS,
+  דומיין שרק נראה כמו IP, שילוב של אותות חלשים, או IP פרטי מה-resolve
+  העצמאי של שכבת ה-infra — כל אלה לכל היותר "לא ודאי". "מסוכן" של
+  Web Risk על כל כתובת בשרשרת תמיד מנצח. false positive נמוך > כיסוי
+  אגרסיבי.
 - **בלי גרדיאנטים מורכבים מדי / בלי ספריות פונט חיצוניות** — נשמר על
   הפונט הדיפולטי של המערכת כדי לא לסבך build נייטיבי.
 - **המשתמש עובד ישירות עם Claude Code** על המחשב — הרשאות מלאות
