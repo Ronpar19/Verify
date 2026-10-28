@@ -50,6 +50,14 @@ import {
   ShieldIcon,
   BoltIcon,
   SearchAdvancedIcon,
+  WarningIcon,
+  WifiOffIcon,
+  RetryIcon,
+  InfoIcon,
+  BanIcon,
+  LockIcon,
+  TrashIcon,
+  PhoneIcon,
 } from './icons';
 
 // Prefer an EXPO_PUBLIC_ env var (Expo inlines these at build time) so you
@@ -68,23 +76,29 @@ const WEB_APP_URL = 'https://verifyweb-phi.vercel.app';
 const APK_URL = `${WEB_APP_URL}/link-checker.apk`;
 export const PRIVACY_URL = `${WEB_APP_URL}/privacy`;
 
+// A check that hasn't answered by now is treated as "couldn't check" (the
+// error state), never as a verdict.
+const REQUEST_TIMEOUT_MS = 15000;
+
 export const COLORS = {
   bg: '#EEF0F6',
   surface: '#FFFFFF',
   text: '#1B1E2B',
-  textSecondary: '#767C93',
+  textSecondary: '#5F6478',
   border: '#E4E7F0',
   chipBg: '#EEF1FC',
+  neutralBg: '#F4F6FA',
+  outlineBorder: '#C9CDDA',
   accent: '#3F5AE0',
   accentDark: '#2E42B0',
   busy: '#8C99E8',
   success: '#1FA25A',
   successBg: '#E6F6ED',
   successBorder: '#CDEBDA',
-  danger: '#E0453F',
+  danger: '#C62828',
   dangerBg: '#FBE9E8',
   dangerBorder: '#F5D2D0',
-  unknown: '#B9770E',
+  unknown: '#8A5B0B',
   unknownBg: '#FDF3E3',
   unknownBorder: '#F3E1B8',
 };
@@ -111,7 +125,7 @@ const STATUS_THEMES = {
     cornerBorder: 'rgba(23,63,41,0.15)',
     cornerIcon: '#1E4B32',
     inputIcon: COLORS.success,
-    buttonGradient: [COLORS.success, '#146B3A'],
+    buttonGradient: ['#157F45', '#146B3A'],
   },
   danger: {
     bg: ['#7A2020', '#B33636'],
@@ -126,12 +140,12 @@ const STATUS_THEMES = {
   unknown: {
     bg: ['#FBF2D9', '#F7E7BE'],
     titleColor: '#5C3D08',
-    taglineColor: '#8A6A2E',
+    taglineColor: '#6E5220',
     cornerBg: 'rgba(255,255,255,0.6)',
     cornerBorder: 'rgba(185,119,14,0.2)',
     cornerIcon: '#5C3D08',
     inputIcon: COLORS.unknown,
-    buttonGradient: [COLORS.unknown, '#8A5B0B'],
+    buttonGradient: ['#8A5B0B', '#6E4808'],
   },
 };
 function themeFor(status) {
@@ -139,9 +153,12 @@ function themeFor(status) {
 }
 
 // If a message has several links, the overall verdict should be the most
-// cautious one found across all of them — danger beats unknown beats safe,
-// and it only ever escalates (never downgrades) as results come in.
-const SEVERITY = { safe: 0, unknown: 1, danger: 2 };
+// cautious one found across all of them — danger beats unknown beats error
+// beats safe, and it only ever escalates (never downgrades) as results come
+// in. 'error' (a link we couldn't check) outranks safe so a message is never
+// called safe while part of it went unchecked, but a link that was actually
+// found suspicious still wins over one that wasn't checked at all.
+const SEVERITY = { safe: 0, error: 1, unknown: 2, danger: 3 };
 function worstOf(current, next) {
   return SEVERITY[next] > SEVERITY[current] ? next : current;
 }
@@ -149,6 +166,7 @@ function worstOf(current, next) {
 function paletteFor(status) {
   if (status === 'safe') return { fg: COLORS.success, bg: COLORS.successBg, border: COLORS.successBorder };
   if (status === 'danger') return { fg: COLORS.danger, bg: COLORS.dangerBg, border: COLORS.dangerBorder };
+  if (status === 'error') return { fg: COLORS.textSecondary, bg: COLORS.bg, border: COLORS.border };
   return { fg: COLORS.unknown, bg: COLORS.unknownBg, border: COLORS.unknownBorder };
 }
 
@@ -171,6 +189,7 @@ function statusA11yLabel(status, t) {
   if (status === 'safe') return t.safeTitle;
   if (status === 'danger') return t.dangerTitle;
   if (status === 'unknown') return t.unknownTitle;
+  if (status === 'error') return t.a11yNotChecked;
   if (status === 'loading') return t.a11yCheckingLink;
   return t.a11yPendingLink;
 }
@@ -178,8 +197,9 @@ function statusA11yLabel(status, t) {
 function StatusIcon({ status, size = 24 }) {
   if (status === 'safe') return <CheckIcon size={size} color={COLORS.success} />;
   if (status === 'danger') return <CloseIcon size={size} color={COLORS.danger} />;
-  if (status === 'unknown') {
-    return <Text style={{ fontSize: size * 0.85, fontWeight: '800', color: COLORS.unknown }}>?</Text>;
+  if (status === 'unknown') return <WarningIcon size={size} color={COLORS.unknown} />;
+  if (status === 'error') {
+    return <Text style={{ fontSize: size * 0.85, fontWeight: '800', color: COLORS.textSecondary }}>!</Text>;
   }
   return <LinkLogoIcon size={size * 0.7} color={COLORS.textSecondary} />;
 }
@@ -191,9 +211,82 @@ function StatusIcon({ status, size = 24 }) {
 // source files' own cream page-background so the tile sits frameless on
 // the app's own background.
 function LogoBadge({ status }) {
+  // "Couldn't check" gets a plain tile with no badge: the default artwork
+  // carries a check mark, which must never sit above an unchecked link.
+  if (status === 'error') {
+    return (
+      <View style={styles.logoBox}>
+        <View style={styles.logoPlainTile}>
+          <LinkLogoIcon size={36} color="#fff" />
+        </View>
+      </View>
+    );
+  }
   return (
     <View style={styles.logoBox}>
       <SvgXml xml={statusLogoXml(status)} width={76} height={76 * STATUS_LOGO_ASPECT} />
+    </View>
+  );
+}
+
+// "What to do now" box shown inside the result card. Practical next steps
+// per verdict — the app never opens the link, so this is the user's
+// guidance for what to do with the message itself.
+const NEXT_STEPS = {
+  danger: {
+    titleKey: 'dangerStepsTitle',
+    steps: [
+      { Icon: BanIcon, key: 'dangerStep1' },
+      { Icon: LockIcon, key: 'dangerStep2' },
+      { Icon: TrashIcon, key: 'dangerStep3' },
+      { Icon: PhoneIcon, key: 'dangerStep4' },
+    ],
+    boxStyle: { backgroundColor: COLORS.dangerBg },
+    titleColor: '#7A1C1C',
+    iconColor: '#B3261E',
+  },
+  unknown: {
+    titleKey: 'unknownStepsTitle',
+    steps: [
+      { Icon: LockIcon, key: 'unknownStep1' },
+      { Icon: GlobeIcon, key: 'unknownStep2' },
+      { Icon: PhoneIcon, key: 'unknownStep3' },
+    ],
+    boxStyle: { backgroundColor: COLORS.unknownBg, borderWidth: 1, borderColor: COLORS.unknownBorder },
+    titleColor: '#5C3D08',
+    iconColor: COLORS.unknown,
+  },
+};
+
+function NextSteps({ status, t, rtl }) {
+  const textAlign = rtl ? 'right' : 'left';
+  const rowDirection = rtl ? 'row-reverse' : 'row';
+
+  if (status === 'safe') {
+    return (
+      <View style={[styles.noticeBox, { flexDirection: rowDirection }]}>
+        <ShieldIcon size={20} color={COLORS.textSecondary} strokeWidth={2.2} />
+        <Text style={[styles.stepText, { textAlign }]}>{t.safeTip}</Text>
+      </View>
+    );
+  }
+
+  const config = NEXT_STEPS[status];
+  if (!config) return null;
+
+  return (
+    <View style={[styles.stepsBox, config.boxStyle]}>
+      <Text style={[styles.stepsTitle, { color: config.titleColor, textAlign }]} accessibilityRole="header">
+        {t[config.titleKey]}
+      </Text>
+      {config.steps.map(({ Icon, key }) => (
+        <View key={key} style={[styles.stepRow, { flexDirection: rowDirection }]}>
+          <View style={styles.stepIcon}>
+            <Icon size={20} color={config.iconColor} strokeWidth={2.2} />
+          </View>
+          <Text style={[styles.stepText, { textAlign }]}>{t[key]}</Text>
+        </View>
+      ))}
     </View>
   );
 }
@@ -212,41 +305,101 @@ function ResultCard({ status, url, details, t, rtl, onReset }) {
         accessibilityRole="image"
         accessibilityLabel={title}
       >
-        <StatusIcon status={status} size={26} />
+        <StatusIcon status={status} size={30} />
       </View>
       <Text style={styles.resultTitle} accessibilityLiveRegion="polite">{title}</Text>
       <Text style={styles.resultSubtitle} accessibilityLiveRegion="polite">{subtitle}</Text>
-      <View style={[styles.resultActions, { flexDirection: rtl ? 'row-reverse' : 'row' }]}>
-        <TouchableOpacity
-          style={styles.resultBtnSecondary}
-          onPress={onReset}
-          accessibilityRole="button"
-          accessibilityLabel={t.checkAnotherBtn}
-        >
-          <Text style={styles.resultBtnSecondaryText}>{t.checkAnotherBtn}</Text>
-        </TouchableOpacity>
-        {status === 'danger' && (
-          <TouchableOpacity
-            style={[styles.resultBtnPrimary, { backgroundColor: COLORS.danger }]}
-            onPress={onReset}
-            accessibilityRole="button"
-            accessibilityLabel={t.blockBtn}
-          >
-            <Text style={styles.resultBtnPrimaryText}>{t.blockBtn}</Text>
-          </TouchableOpacity>
-        )}
-      </View>
+      <NextSteps status={status} t={t} rtl={rtl} />
+      <TouchableOpacity
+        style={styles.resultBtnOutline}
+        onPress={onReset}
+        accessibilityRole="button"
+        accessibilityLabel={t.checkAnotherBtn}
+      >
+        <Text style={styles.resultBtnOutlineText}>{t.checkAnotherBtn}</Text>
+      </TouchableOpacity>
     </View>
   );
 }
 
-function MultiResultCard({ checks, overallStatus, t, rtl, onReset }) {
+// Why a check ended in the error state: no answer at all (network down or
+// timed out), the server refused for rate limiting, or the server failed.
+function errorSubtitleFor(check, t) {
+  if (check.errorKind === 'rateLimited') return check.details || t.rateLimitedSubtitle;
+  if (check.errorKind === 'server') return t.serverErrorSubtitle;
+  return t.offlineSubtitle;
+}
+
+function RetryButton({ t, rtl, onRetry }) {
+  return (
+    <TouchableOpacity
+      style={styles.retryBtn}
+      onPress={onRetry}
+      activeOpacity={0.85}
+      accessibilityRole="button"
+      accessibilityLabel={t.retryBtn}
+    >
+      <LinearGradient
+        colors={[COLORS.accent, COLORS.accentDark]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={[styles.retryBtnInner, { flexDirection: rtl ? 'row-reverse' : 'row' }]}
+      >
+        <RetryIcon size={18} color="#fff" />
+        <Text style={styles.checkBtnText}>{t.retryBtn}</Text>
+      </LinearGradient>
+    </TouchableOpacity>
+  );
+}
+
+// The link couldn't be checked at all. Deliberately not a verdict: neutral
+// colors, says plainly the link was NOT checked, and offers a retry.
+function ErrorCard({ check, t, rtl, onRetry, onCancel }) {
+  const isOffline = check.errorKind !== 'rateLimited' && check.errorKind !== 'server';
+  return (
+    <View style={[styles.resultCard, { borderColor: COLORS.border }]}>
+      <View
+        style={[styles.resultIconCircle, { backgroundColor: COLORS.bg }]}
+        accessible
+        accessibilityRole="image"
+        accessibilityLabel={t.a11yNotChecked}
+      >
+        {isOffline ? (
+          <WifiOffIcon size={30} color={COLORS.textSecondary} />
+        ) : (
+          <InfoIcon size={30} color={COLORS.textSecondary} />
+        )}
+      </View>
+      <Text style={styles.resultTitle} accessibilityLiveRegion="assertive">{t.offlineTitle}</Text>
+      <Text style={styles.resultSubtitle}>{errorSubtitleFor(check, t)}</Text>
+      <View style={[styles.noticeBox, { flexDirection: rtl ? 'row-reverse' : 'row' }]}>
+        <InfoIcon size={20} color={COLORS.textSecondary} />
+        <Text style={[styles.stepText, { textAlign: rtl ? 'right' : 'left' }]}>
+          <Text style={styles.boldText}>{t.offlineNotCheckedBold}</Text>
+          {t.offlineNotCheckedRest}
+        </Text>
+      </View>
+      <RetryButton t={t} rtl={rtl} onRetry={onRetry} />
+      <TouchableOpacity
+        style={[styles.resultBtnOutline, styles.cancelBtn]}
+        onPress={onCancel}
+        accessibilityRole="button"
+        accessibilityLabel={t.cancelBtn}
+      >
+        <Text style={styles.resultBtnOutlineText}>{t.cancelBtn}</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+function MultiResultCard({ checks, overallStatus, t, rtl, onReset, onRetry }) {
   const palette = paletteFor(overallStatus === 'loading' ? 'unknown' : overallStatus);
   const caption =
     overallStatus === 'danger' ? t.multiDanger
     : overallStatus === 'unknown' ? t.multiUnknown
     : overallStatus === 'safe' ? t.multiSafe
     : '';
+  const hasUnchecked = checks.some((c) => c.status === 'error');
 
   return (
     <View style={[styles.resultCard, { borderColor: palette.border }]}>
@@ -276,17 +429,24 @@ function MultiResultCard({ checks, overallStatus, t, rtl, onReset }) {
                   {c.details}
                 </Text>
               )}
+              {c.status === 'error' && (
+                <Text style={[styles.linkRowDetails, { textAlign: rtl ? 'right' : 'left' }]} numberOfLines={2}>
+                  {t.a11yNotChecked}
+                </Text>
+              )}
             </View>
           </View>
         ))}
       </View>
+      {overallStatus !== 'loading' && <NextSteps status={overallStatus} t={t} rtl={rtl} />}
+      {hasUnchecked && overallStatus !== 'loading' && <RetryButton t={t} rtl={rtl} onRetry={onRetry} />}
       <TouchableOpacity
-        style={[styles.resultBtnSecondary, styles.resultBtnFull]}
+        style={[styles.resultBtnOutline, hasUnchecked && styles.cancelBtn]}
         onPress={onReset}
         accessibilityRole="button"
         accessibilityLabel={t.checkAnotherBtn}
       >
-        <Text style={styles.resultBtnSecondaryText}>{t.checkAnotherBtn}</Text>
+        <Text style={styles.resultBtnOutlineText}>{t.checkAnotherBtn}</Text>
       </TouchableOpacity>
     </View>
   );
@@ -318,9 +478,10 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
 
   const [link, setLink] = useState('');
   // One entry per link found in the pasted text. Each entry's status is
-  // pending | loading | safe | danger | unknown.
+  // pending | loading | safe | danger | unknown | error. An 'error' entry
+  // (couldn't be checked) also carries errorKind: offline | server | rateLimited.
   const [checks, setChecks] = useState([]);
-  const [overallStatus, setOverallStatus] = useState('idle'); // idle | loading | safe | danger | unknown
+  const [overallStatus, setOverallStatus] = useState('idle'); // idle | loading | safe | danger | unknown | error
   const requestSeqRef = useRef(0);
 
   // Finds every link in the pasted text and checks them one after another
@@ -328,6 +489,41 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
   // "danger" the moment a dangerous link turns up — it doesn't wait for
   // the whole batch — while the rest keep checking in the background so
   // you can see exactly which link(s) triggered it.
+  // One backend call. Anything other than a well-formed 2xx answer —
+  // no network, a timeout, 429, 5xx — is an 'error' (not checked), never a
+  // verdict.
+  const checkOne = useCallback(async (url) => {
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS) : null;
+    let response;
+    try {
+      response = await fetch(API_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(APP_SECRET ? { 'x-app-secret': APP_SECRET } : {}),
+        },
+        body: JSON.stringify({ link: url, lang }),
+        ...(controller ? { signal: controller.signal } : {}),
+      });
+    } catch (err) {
+      if (timer) clearTimeout(timer);
+      return { status: 'error', errorKind: 'offline', details: '' };
+    }
+
+    try {
+      const data = await response.json().catch(() => null);
+      if (response.status === 429) {
+        return { status: 'error', errorKind: 'rateLimited', details: (data && data.details) || '' };
+      }
+      if (!response.ok || !data) return { status: 'error', errorKind: 'server', details: '' };
+      const s = ['safe', 'danger', 'unknown'].includes(data.status) ? data.status : 'unknown';
+      return { status: s, details: data.details || '' };
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }, [lang]);
+
   const runCheck = useCallback(async (rawText) => {
     const urls = extractUrls(rawText);
     if (!urls.length) return;
@@ -344,34 +540,21 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
 
       setChecks((prev) => prev.map((c, idx) => (idx === i ? { ...c, status: 'loading' } : c)));
 
-      let result;
-      try {
-        const response = await fetch(API_URL, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(APP_SECRET ? { 'x-app-secret': APP_SECRET } : {}),
-          },
-          body: JSON.stringify({ link: urls[i], lang }),
-        });
-        const data = await response.json();
-        const s = ['safe', 'danger', 'unknown'].includes(data.status) ? data.status : 'unknown';
-        result = { status: s, details: data.details || '' };
-      } catch (err) {
-        result = { status: 'unknown', details: t.connectionError };
-      }
+      const result = await checkOne(urls[i]);
 
       if (seq !== requestSeqRef.current) return;
 
       setChecks((prev) => prev.map((c, idx) => (idx === i ? { url: urls[i], ...result } : c)));
 
+      // Escalate mid-run only to a real warning; "couldn't check" waits for
+      // the end, since a later link may still turn out suspicious.
       const before = worst;
       worst = worstOf(worst, result.status);
-      if (worst !== before) setOverallStatus(worst);
+      if (worst !== before && worst !== 'error') setOverallStatus(worst);
     }
 
     if (seq === requestSeqRef.current) setOverallStatus(worst);
-  }, [lang, t]);
+  }, [checkOne]);
 
   // Android "Share" into the app (e.g. selecting text in Messages/WhatsApp
   // → Share → Verify) lands here: App.js hands us the raw shared text via
@@ -390,7 +573,12 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
   // privacy). This reads the clipboard instead — copy the link first
   // (long-press → Copy in Messages/Mail), then tap this button.
   const handleAutoPaste = useCallback(async () => {
-    const text = await Clipboard.getStringAsync();
+    let text;
+    try {
+      text = await Clipboard.getStringAsync();
+    } catch (err) {
+      return; // clipboard permission denied (e.g. in the browser) — nothing to check
+    }
     if (text && text.trim()) runCheck(text);
   }, [runCheck]);
 
@@ -423,7 +611,9 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
 
   const isBusy = overallStatus === 'loading';
   const isIdle = overallStatus === 'idle';
-  const showSingleResult = checks.length === 1 && !isBusy && !isIdle;
+  const isError = overallStatus === 'error';
+  const showSingleResult = checks.length === 1 && !isBusy && !isIdle && !isError;
+  const showSingleError = checks.length === 1 && isError;
   const showMultiResult = checks.length > 1;
   const checkButtonLabel = isBusy ? t.checkBtnBusy : isIdle ? t.checkBtnIdle : t.checkBtnAgain;
   // While a check is running we haven't reached a verdict yet, so the theme
@@ -472,7 +662,7 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
               onChangeText={setLink}
               onSubmitEditing={() => runCheck(link)}
               placeholder={t.placeholder}
-              placeholderTextColor="#9ba0b8"
+              placeholderTextColor="#6B7088"
               autoCapitalize="none"
               autoCorrect={false}
               keyboardType="url"
@@ -485,31 +675,33 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
                 onPress={handleClear}
                 accessibilityRole="button"
                 accessibilityLabel={t.clearA11y}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
               >
                 <Text style={styles.clearBtnText}>×</Text>
               </TouchableOpacity>
             )}
           </View>
 
-          <TouchableOpacity
-            style={styles.checkBtn}
-            onPress={handleCheckPress}
-            disabled={isBusy || !link.trim()}
-            activeOpacity={0.85}
-            accessibilityRole="button"
-            accessibilityLabel={checkButtonLabel}
-          >
-            <LinearGradient
-              colors={isBusy ? [COLORS.busy, COLORS.busy] : theme.buttonGradient}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={[styles.checkBtnInner, { flexDirection: rtl ? 'row-reverse' : 'row' }]}
+          {!isError && (
+            <TouchableOpacity
+              style={styles.checkBtn}
+              onPress={handleCheckPress}
+              disabled={isBusy || !link.trim()}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel={checkButtonLabel}
             >
-              {isBusy ? <ActivityIndicator size="small" color="#fff" /> : <SearchIcon size={17} color="#fff" />}
-              <Text style={styles.checkBtnText}>{checkButtonLabel}</Text>
-            </LinearGradient>
-          </TouchableOpacity>
+              <LinearGradient
+                colors={isBusy ? [COLORS.busy, COLORS.busy] : theme.buttonGradient}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={[styles.checkBtnInner, { flexDirection: rtl ? 'row-reverse' : 'row' }]}
+              >
+                {isBusy ? <ActivityIndicator size="small" color="#fff" /> : <SearchIcon size={17} color="#fff" />}
+                <Text style={styles.checkBtnText}>{checkButtonLabel}</Text>
+              </LinearGradient>
+            </TouchableOpacity>
+          )}
 
           {isBusy && <Text style={styles.checkingHint}>{t.checkingHint}</Text>}
 
@@ -524,8 +716,19 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
             />
           )}
 
+          {showSingleError && (
+            <ErrorCard check={checks[0]} t={t} rtl={rtl} onRetry={handleCheckPress} onCancel={handleClear} />
+          )}
+
           {showMultiResult && (
-            <MultiResultCard checks={checks} overallStatus={overallStatus} t={t} rtl={rtl} onReset={handleClear} />
+            <MultiResultCard
+              checks={checks}
+              overallStatus={overallStatus}
+              t={t}
+              rtl={rtl}
+              onReset={handleClear}
+              onRetry={handleCheckPress}
+            />
           )}
 
           {isIdle && (
@@ -836,48 +1039,75 @@ const styles = StyleSheet.create({
     marginTop: 8,
     alignItems: 'center', justifyContent: 'center',
   },
+  logoPlainTile: {
+    width: 76, height: 76, borderRadius: 20, backgroundColor: COLORS.accent,
+    alignItems: 'center', justifyContent: 'center',
+  },
   appName: { marginTop: 14, fontSize: 27, fontWeight: '800', letterSpacing: -0.5, color: COLORS.text },
   tagline: { marginTop: 4, fontSize: 14, color: COLORS.textSecondary },
   inputRow: {
     width: '100%', maxWidth: 420, marginTop: 26,
     flexDirection: 'row', alignItems: 'center', gap: 10,
     backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border,
-    borderRadius: 16, paddingHorizontal: 16, height: 52,
+    borderRadius: 16, paddingHorizontal: 16, minHeight: 52,
   },
   inputIcon: { flexShrink: 0 },
   input: { flex: 1, fontSize: 15, color: COLORS.text },
   clearBtn: {
-    width: 26, height: 26, borderRadius: 13,
+    width: 32, height: 32, borderRadius: 16,
     backgroundColor: 'rgba(20,20,40,0.06)', alignItems: 'center', justifyContent: 'center',
   },
-  clearBtnText: { fontSize: 16, color: COLORS.textSecondary },
+  clearBtnText: { fontSize: 18, color: COLORS.textSecondary },
   checkBtn: {
     width: '100%', maxWidth: 420, marginTop: 12, borderRadius: 16, overflow: 'hidden',
     shadowColor: '#28378C', shadowOpacity: 0.22, shadowRadius: 12, shadowOffset: { width: 0, height: 6 },
     elevation: 4,
   },
   checkBtnInner: {
-    height: 52, alignItems: 'center', justifyContent: 'center', gap: 10,
+    minHeight: 52, alignItems: 'center', justifyContent: 'center', gap: 10,
   },
   checkBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
   checkingHint: { marginTop: 14, fontSize: 13, color: COLORS.textSecondary, textAlign: 'center' },
   resultCard: {
     width: '100%', maxWidth: 420, marginTop: 18,
-    backgroundColor: COLORS.surface, borderWidth: 1, borderRadius: 18,
-    padding: 20, alignItems: 'center',
+    backgroundColor: COLORS.surface, borderWidth: 1, borderRadius: 20,
+    paddingTop: 22, paddingHorizontal: 18, paddingBottom: 18, alignItems: 'center',
   },
   resultIconCircle: {
-    width: 52, height: 52, borderRadius: 26, alignItems: 'center', justifyContent: 'center',
+    width: 64, height: 64, borderRadius: 32, alignItems: 'center', justifyContent: 'center',
   },
-  resultTitle: { marginTop: 12, fontSize: 17, fontWeight: '700', color: COLORS.text, textAlign: 'center' },
-  resultSubtitle: { marginTop: 4, fontSize: 13, color: COLORS.textSecondary, textAlign: 'center' },
-  resultActions: { width: '100%', gap: 10, marginTop: 16 },
+  resultTitle: {
+    marginTop: 12, fontSize: 22, lineHeight: 28, fontWeight: '800', color: COLORS.text, textAlign: 'center',
+  },
+  resultSubtitle: { marginTop: 6, fontSize: 15, lineHeight: 22, color: COLORS.textSecondary, textAlign: 'center' },
+  resultBtnOutline: {
+    width: '100%', minHeight: 52, marginTop: 16, borderRadius: 14, borderWidth: 1.5,
+    borderColor: COLORS.outlineBorder, backgroundColor: COLORS.surface,
+    alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12,
+  },
+  resultBtnOutlineText: { color: COLORS.text, fontSize: 16, fontWeight: '700', textAlign: 'center' },
+  cancelBtn: { minHeight: 48, marginTop: 10 },
+  retryBtn: { width: '100%', marginTop: 18, borderRadius: 14, overflow: 'hidden' },
+  retryBtnInner: { minHeight: 52, alignItems: 'center', justifyContent: 'center', gap: 10, paddingHorizontal: 12 },
+  stepsBox: {
+    width: '100%', marginTop: 16, borderRadius: 14,
+    paddingTop: 14, paddingHorizontal: 14, paddingBottom: 6,
+  },
+  stepsTitle: { fontSize: 15, fontWeight: '700', marginBottom: 8 },
+  stepRow: { alignItems: 'flex-start', gap: 10, marginBottom: 10 },
+  stepIcon: { flexShrink: 0, marginTop: 1 },
+  stepText: { flex: 1, fontSize: 15, lineHeight: 22, color: COLORS.text },
+  boldText: { fontWeight: '700' },
+  noticeBox: {
+    width: '100%', marginTop: 16, borderRadius: 14, backgroundColor: COLORS.neutralBg,
+    paddingVertical: 12, paddingHorizontal: 14, alignItems: 'flex-start', gap: 10,
+  },
   resultBtnSecondary: {
-    flex: 1, height: 44, borderRadius: 13, borderWidth: 1, borderColor: COLORS.border,
+    flex: 1, minHeight: 44, borderRadius: 13, borderWidth: 1, borderColor: COLORS.border,
     backgroundColor: COLORS.surface, alignItems: 'center', justifyContent: 'center',
   },
   resultBtnSecondaryText: { color: COLORS.textSecondary, fontSize: 14, fontWeight: '600' },
-  resultBtnPrimary: { flex: 1, height: 44, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
+  resultBtnPrimary: { flex: 1, minHeight: 44, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
   resultBtnPrimaryText: { color: '#fff', fontSize: 14, fontWeight: '700' },
   resultBtnFull: { width: '100%', marginTop: 4 },
   multiCaption: { fontSize: 13, fontWeight: '700', color: COLORS.text, textAlign: 'center' },
@@ -891,25 +1121,25 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   linkRowTextBlock: { flex: 1, marginHorizontal: 10 },
-  linkRowUrl: { color: COLORS.text, fontSize: 13, fontWeight: '600' },
-  linkRowDetails: { color: COLORS.textSecondary, fontSize: 12, marginTop: 4, lineHeight: 17 },
+  linkRowUrl: { color: COLORS.text, fontSize: 14, fontWeight: '600' },
+  linkRowDetails: { color: COLORS.textSecondary, fontSize: 13, marginTop: 4, lineHeight: 18 },
   dividerRow: { width: '100%', maxWidth: 420, flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 20 },
   dividerLine: { flex: 1, height: 1, backgroundColor: COLORS.border },
   dividerText: { fontSize: 12, color: COLORS.textSecondary },
   pasteBtn: {
-    alignSelf: 'center', marginTop: 14, paddingHorizontal: 16, paddingVertical: 9,
+    alignSelf: 'center', marginTop: 14, minHeight: 44, paddingHorizontal: 16, paddingVertical: 9,
     borderRadius: 18,
     borderWidth: 1.5, borderColor: COLORS.accent, backgroundColor: COLORS.surface,
     alignItems: 'center', justifyContent: 'center', gap: 7,
   },
-  pasteBtnText: { color: COLORS.accent, fontSize: 12.5, fontWeight: '700' },
+  pasteBtnText: { color: COLORS.accent, fontSize: 14, fontWeight: '700' },
   chipsRow: { width: '100%', maxWidth: 420, flexDirection: 'row', marginTop: 24 },
   chip: { flex: 1, alignItems: 'center', gap: 8 },
   chipIconCircle: {
     width: 42, height: 42, borderRadius: 21, backgroundColor: COLORS.chipBg,
     alignItems: 'center', justifyContent: 'center',
   },
-  chipLabel: { fontSize: 11.5, color: COLORS.textSecondary, fontWeight: '600', textAlign: 'center' },
+  chipLabel: { fontSize: 12.5, color: COLORS.textSecondary, fontWeight: '600', textAlign: 'center' },
   drawerRoot: { flex: 1, flexDirection: 'row' },
   drawerBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)' },
   drawerPanel: {
@@ -938,7 +1168,7 @@ const styles = StyleSheet.create({
   },
   drawerRowText: { fontSize: 14.5, fontWeight: '600', color: COLORS.text },
   footer: {
-    marginTop: 18, color: COLORS.textSecondary, fontSize: 11, textAlign: 'center', paddingHorizontal: 8,
+    marginTop: 18, color: COLORS.textSecondary, fontSize: 12, textAlign: 'center', paddingHorizontal: 8,
   },
   legalLinksRow: {
     marginTop: 8, alignItems: 'center', justifyContent: 'center', gap: 8,
