@@ -53,12 +53,13 @@ project is interesting* below for why.)
   announcements throughout the main flow
 - First-launch terms/consent screen, and a hosted, publicly-linked
   privacy policy page (required for app-store submission)
-- Redirect resolution + SSRF protection
+- Redirect resolution with connect-time SSRF protection on every hop
+  (IPv4 and IPv6), under a 10-second budget for the whole chain
 - Per-IP rate limiting, shared-secret request auth, and privacy-
   conscious usage stats, all backed by Upstash Redis
-- 145 automated tests across two suites (backend detection logic +
-  API behavior, and URL extraction), zero live network calls
-  required to run either
+- 361 automated tests across two suites (346 for backend detection
+  logic + API behavior, 15 for URL extraction), zero live network
+  calls required to run either
 
 ## Why this project is interesting (the engineering decisions)
 
@@ -74,12 +75,28 @@ project is interesting* below for why.)
   detection) each contribute signals that fold into one scoring
   system — not three competing verdicts.
 - **A deliberately conservative trust model.** Only three patterns
-  with *no legitimate use whatsoever* (the userinfo `@` trick, a raw
-  IP address, a private/internal address the backend itself refused
-  to connect to) are allowed to force a "dangerous" verdict outright.
-  Every other signal — however strong — only ever raises a numeric
-  score, never bypasses Web Risk's own judgment. This was a deliberate
-  design choice to keep false positives low, not an oversight.
+  with *no legitimate use whatsoever* are allowed to force a
+  "dangerous" verdict outright: an `@` in the URL's userinfo part
+  (not in the path or query), a raw IPv4/IPv6 address in any
+  notation standing in for a domain, and a private/internal IP
+  written literally into the link or into any redirect's `Location`.
+  These are checked on every hop of the redirect chain, not just the
+  first. A hostname that merely *resolves* to a private address is
+  still blocked from being fetched, but is reported as "uncertain",
+  not "dangerous"; likewise a hostname that only *looks like* an IP
+  (`1.2.3.4.evil.com`). Every other signal — however strong — only
+  ever raises a numeric score, never bypasses Web Risk's own
+  judgment. This was a deliberate design choice to keep false
+  positives low, not an oversight.
+- **No false alarms for small Israeli sites.** When Web Risk is clean
+  and *every* signal found on a `.il` link comes from a closed list of
+  weak signals (plain `http`, urgency words, a complex URL, many
+  subdomains, a lone brand name, a random-looking hostname), the link
+  isn't downgraded for them. Any stronger signal (typosquatting,
+  subdomain decoys, homoglyphs, punycode, suspicious encoding, a
+  young domain, a private DNS answer, an incomplete redirect chain)
+  still yields "uncertain", and any signal added in the future voids
+  the exemption by default.
 - **A latency-conscious race pattern.** Web Risk and the
   infrastructure layer run *concurrently*, not sequentially — but if
   Web Risk already confirms "dangerous," the response returns
@@ -88,17 +105,22 @@ project is interesting* below for why.)
   infrastructure lookup is deliberately left to finish or be dropped
   in the background rather than adding an `AbortController` just to
   cancel work whose result would never be used.
-- **SSRF-aware redirect resolution, with an explicit TOCTOU
-  boundary.** The backend resolves redirects itself (to catch
-  shortened links) and refuses to follow one into a private/loopback/
-  link-local address *before ever connecting to it* — a real
-  guarantee. The infrastructure layer's own DNS lookup, by contrast,
-  is independent of that connection and can't make the same
-  guarantee (a classic DNS-rebinding TOCTOU window) — so a
-  private/internal IP found *only* there is scored as a strong
-  signal, but is explicitly never allowed to force a "dangerous"
-  verdict on its own. The distinction is documented inline at the
-  exact line where it matters, not just in a design doc.
+- **SSRF protection enforced at connect time, with no TOCTOU gap.**
+  The backend resolves redirects itself (to catch shortened links)
+  over `node:http`/`node:https` with its own DNS `lookup` hook: *all*
+  addresses returned for the host are classified with `ipaddr.js`,
+  and if any one is not public unicast (private, loopback,
+  link-local, CGNAT, `0.0.0.0/8`, `fc00::/7`, IPv4-mapped, NAT64,
+  `localhost`/`*.localhost`, ...), the connection is refused before
+  a socket is opened. A hostname that merely *resolves* to a private
+  address is refused too, but scored "uncertain", not "dangerous" —
+  DNS is the domain owner's to change. The check runs on the very answer the socket
+  uses, so DNS rebinding can't slip between check and connect. The
+  separate infrastructure layer still does its own independent DNS
+  lookup, so a private IP found *only* there stays a scored signal
+  and is never allowed to force "dangerous" on its own. The
+  distinction is documented inline at the exact line where it
+  matters, not just in a design doc.
 - **Rate limiting + fail-safe error handling.** The public endpoint
   is protected from abuse of the free API quota, and any failure
   anywhere in the chain — Web Risk, DNS, RDAP — degrades gracefully
@@ -129,7 +151,7 @@ deliberately for a project meant to be maintained long-term.
 | Domain intelligence | `psl` (registrable-domain / Public Suffix List parsing), `punycode` (IDN homoglyph decoding), `ipaddr.js` (private/reserved IP classification), public RDAP (domain age) |
 | Rate limiting / stats | Upstash Redis (free tier)            |
 | Build      | EAS Build (free tier, internal distribution)     |
-| Tests      | Custom test runner (`test.mjs`), mocked `fetch`/DNS/RDAP, no live network calls |
+| Tests      | Custom test runner (`test.mjs`), mocked network/DNS/RDAP, no live network calls |
 
 ## Architecture
 
@@ -140,7 +162,7 @@ deliberately for a project meant to be maintained long-term.
                                        ▼
                           [Vercel /api/check-link]
                                        │
-                        resolve redirects (SSRF-guarded)
+                resolve redirects (connect-time SSRF guard, every hop)
                                        │
                     ┌──────────────────┼──────────────────┐
                     ▼                  ▼                  ▼
@@ -165,12 +187,22 @@ Backend API (for reference, not meant for direct browsing):
 1. Validates the request is `POST` with a non-empty `link` string,
    checks the (optional) shared-secret header, and enforces per-IP
    rate limiting.
-2. Normalizes the URL and **resolves redirects** (up to 5 hops) so a
-   shortened link gets checked at its *real* destination.
-3. Refuses to follow a redirect into a private/loopback/link-local
-   address (SSRF guard) — before any connection is attempted.
-4. Starts the Google Web Risk lookup and the DNS/infrastructure
-   analysis (`api/_lib/infrastructure.js`) concurrently.
+2. Normalizes the URL and **resolves redirects** (up to 5 hops, with
+   a 10-second budget for the whole chain) so a shortened link gets
+   checked at its *real* destination. Links with userinfo (`@`) are
+   never fetched at all.
+3. On every hop, checks the IPs the connection is actually about to
+   use and refuses anything non-public (SSRF guard), before a socket
+   is opened. If the chain can't be completed after at least one
+   redirect — blocked, over 5 hops, or out of time — the result is
+   never "safe". (A timeout on the very first hop just checks the
+   link itself, since some Israeli bank and government sites block
+   traffic from abroad.)
+4. Starts the Google Web Risk lookup — on **every URL in the chain**,
+   including the original and any blocked hop, so a flagged link
+   can't hide behind a redirect to a clean site — and the
+   DNS/infrastructure analysis (`api/_lib/infrastructure.js`)
+   concurrently.
 5. If Web Risk confirms "dangerous," returns immediately — no
    infrastructure signal could change that outcome anyway.
    Otherwise, waits for the infrastructure result and combines it
@@ -185,12 +217,18 @@ Backend API (for reference, not meant for direct browsing):
 
 ## Security notes
 
-- **SSRF guard is a literal-hostname check on the connection
-  `resolveFinalUrl()` itself makes**, not a DNS-resolution check — a
-  real, pre-connection guarantee. The DNS/infrastructure layer's own
-  independent lookup is a *separate*, best-effort signal with a
-  documented TOCTOU limitation (see above) — it strengthens the
-  score but is deliberately never treated as equivalent proof.
+- **SSRF guard checks the resolved IPs at connect time, on every
+  hop**, for both HTTP and HTTPS, via a custom DNS `lookup` — so DNS
+  rebinding can't get a private target past it. Private IPs written
+  literally into a link are rejected even earlier. The
+  DNS/infrastructure layer's own independent lookup is a *separate*,
+  best-effort signal with a documented TOCTOU limitation (see above)
+  — it strengthens the score but is deliberately never treated as
+  equivalent proof.
+- **Bounded work per request.** The whole redirect chain shares a
+  10-second budget and a 5-hop limit; a chain cut short after at
+  least one redirect (timeout, budget, or hop limit) degrades to
+  "uncertain", never "safe".
 - **CORS is restricted to the deployed PWA origin** (and its Vercel
   preview deployments, and localhost for development) rather than
   wide open — the API itself remains usable by the native app
