@@ -35,6 +35,7 @@ import * as Clipboard from 'expo-clipboard';
 import * as Localization from 'expo-localization';
 import { LANGUAGES, STRINGS, isRTL, getDeviceDefaultLanguage } from './translations';
 import { extractUrls } from './extractUrls';
+import { rowDirection, applyDocumentDirection } from './direction';
 import { getTermsBody, TERMS_UPDATED_DATE } from './terms';
 import { statusIconXml, statusLogoXml, STATUS_LOGO_ASPECT } from './statusIcons';
 import {
@@ -260,11 +261,11 @@ const NEXT_STEPS = {
 
 function NextSteps({ status, t, rtl }) {
   const textAlign = rtl ? 'right' : 'left';
-  const rowDirection = rtl ? 'row-reverse' : 'row';
+  const rowDir = rowDirection(rtl);
 
   if (status === 'safe') {
     return (
-      <View style={[styles.noticeBox, { flexDirection: rowDirection }]}>
+      <View style={[styles.noticeBox, { flexDirection: rowDir }]}>
         <ShieldIcon size={20} color={COLORS.textSecondary} strokeWidth={2.2} />
         <Text style={[styles.stepText, { textAlign }]}>{t.safeTip}</Text>
       </View>
@@ -280,7 +281,7 @@ function NextSteps({ status, t, rtl }) {
         {t[config.titleKey]}
       </Text>
       {config.steps.map(({ Icon, key }) => (
-        <View key={key} style={[styles.stepRow, { flexDirection: rowDirection }]}>
+        <View key={key} style={[styles.stepRow, { flexDirection: rowDir }]}>
           <View style={styles.stepIcon}>
             <Icon size={20} color={config.iconColor} strokeWidth={2.2} />
           </View>
@@ -343,7 +344,7 @@ function RetryButton({ t, rtl, onRetry }) {
         colors={[COLORS.accent, COLORS.accentDark]}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
-        style={[styles.retryBtnInner, { flexDirection: rtl ? 'row-reverse' : 'row' }]}
+        style={[styles.retryBtnInner, { flexDirection: rowDirection(rtl) }]}
       >
         <RetryIcon size={18} color="#fff" />
         <Text style={styles.checkBtnText}>{t.retryBtn}</Text>
@@ -372,7 +373,7 @@ function ErrorCard({ check, t, rtl, onRetry, onCancel }) {
       </View>
       <Text style={styles.resultTitle} accessibilityLiveRegion="assertive">{t.offlineTitle}</Text>
       <Text style={styles.resultSubtitle}>{errorSubtitleFor(check, t)}</Text>
-      <View style={[styles.noticeBox, { flexDirection: rtl ? 'row-reverse' : 'row' }]}>
+      <View style={[styles.noticeBox, { flexDirection: rowDirection(rtl) }]}>
         <InfoIcon size={20} color={COLORS.textSecondary} />
         <Text style={[styles.stepText, { textAlign: rtl ? 'right' : 'left' }]}>
           <Text style={styles.boldText}>{t.offlineNotCheckedBold}</Text>
@@ -407,7 +408,7 @@ function MultiResultCard({ checks, overallStatus, t, rtl, onReset, onRetry }) {
       {!!caption && <Text style={styles.resultSubtitle} accessibilityLiveRegion="polite">{caption}</Text>}
       <View style={styles.linksList}>
         {checks.map((c, idx) => (
-          <View key={`${idx}-${c.url}`} style={[styles.linkRow, { flexDirection: rtl ? 'row-reverse' : 'row' }]}>
+          <View key={`${idx}-${c.url}`} style={[styles.linkRow, { flexDirection: rowDirection(rtl) }]}>
             <View
               style={styles.linkRowIconCircle}
               accessible
@@ -475,6 +476,8 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
   const rtl = isRTL(lang);
   const { text: termsBody, isFallback: termsIsFallback } = getTermsBody(lang);
   const termsBodyIsRTL = termsIsFallback ? true : rtl;
+
+  useEffect(() => applyDocumentDirection(lang), [lang]);
 
   const [link, setLink] = useState('');
   // One entry per link found in the pasted text. Each entry's status is
@@ -652,7 +655,7 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
           <Text style={[styles.appName, { color: theme.titleColor }]}>{t.appName}</Text>
           <Text style={[styles.tagline, { color: theme.taglineColor }]}>{t.tagline}</Text>
 
-          <View style={styles.inputRow}>
+          <View style={[styles.inputRow, { flexDirection: rowDirection(rtl) }]}>
             <View style={styles.inputIcon}>
               <LinkLogoIcon size={18} color={theme.inputIcon} />
             </View>
@@ -695,7 +698,7 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
                 colors={isBusy ? [COLORS.busy, COLORS.busy] : theme.buttonGradient}
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 1 }}
-                style={[styles.checkBtnInner, { flexDirection: rtl ? 'row-reverse' : 'row' }]}
+                style={[styles.checkBtnInner, { flexDirection: rowDirection(rtl) }]}
               >
                 {isBusy ? <ActivityIndicator size="small" color="#fff" /> : <SearchIcon size={17} color="#fff" />}
                 <Text style={styles.checkBtnText}>{checkButtonLabel}</Text>
@@ -740,7 +743,7 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
               </View>
 
               <TouchableOpacity
-                style={[styles.pasteBtn, { flexDirection: rtl ? 'row-reverse' : 'row' }]}
+                style={[styles.pasteBtn, { flexDirection: rowDirection(rtl) }]}
                 onPress={handleAutoPaste}
                 accessibilityRole="button"
                 accessibilityLabel={t.autoPasteA11y}
@@ -758,7 +761,7 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
           )}
 
           <Text style={[styles.footer, { color: theme.taglineColor }]}>{t.footer}</Text>
-          <View style={[styles.legalLinksRow, { flexDirection: rtl ? 'row-reverse' : 'row' }]}>
+          <View style={[styles.legalLinksRow, { flexDirection: rowDirection(rtl) }]}>
             <TouchableOpacity
               onPress={() => setTermsVisible(true)}
               accessibilityRole="button"
@@ -780,7 +783,7 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
         <Modal visible={menuVisible} transparent onRequestClose={() => setMenuVisible(false)}>
           <View style={styles.drawerRoot}>
             <View style={styles.drawerPanel}>
-              <View style={[styles.drawerHeader, { flexDirection: rtl ? 'row-reverse' : 'row' }]}>
+              <View style={[styles.drawerHeader, { flexDirection: rowDirection(rtl) }]}>
                 <Text style={styles.drawerTitle}>{t.downloadTitle}</Text>
                 <TouchableOpacity
                   onPress={() => setMenuVisible(false)}
@@ -794,7 +797,7 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
               </View>
 
               <TouchableOpacity
-                style={[styles.drawerRow, { flexDirection: rtl ? 'row-reverse' : 'row' }]}
+                style={[styles.drawerRow, { flexDirection: rowDirection(rtl) }]}
                 onPress={() => {
                   setMenuVisible(false);
                   setIosHelpVisible(true);
@@ -809,7 +812,7 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={[styles.drawerRow, { flexDirection: rtl ? 'row-reverse' : 'row' }]}
+                style={[styles.drawerRow, { flexDirection: rowDirection(rtl) }]}
                 onPress={() => {
                   setMenuVisible(false);
                   handleAndroidDownload();
@@ -824,7 +827,7 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={[styles.drawerRow, { flexDirection: rtl ? 'row-reverse' : 'row' }]}
+                style={[styles.drawerRow, { flexDirection: rowDirection(rtl) }]}
                 onPress={() => {
                   setMenuVisible(false);
                   handleOpenPrivacy();
@@ -879,14 +882,14 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
             <Pressable style={styles.helpCard} onPress={() => {}}>
               <Text style={styles.helpTitle}>{t.iosHelpTitle}</Text>
               {t.iosHelpSteps.map((step, i) => (
-                <View key={i} style={[styles.helpStepRow, { flexDirection: rtl ? 'row-reverse' : 'row' }]}>
+                <View key={i} style={[styles.helpStepRow, { flexDirection: rowDirection(rtl) }]}>
                   <View style={styles.helpStepNumber}>
                     <Text style={styles.helpStepNumberText}>{i + 1}</Text>
                   </View>
                   <Text style={[styles.helpStepText, { textAlign: rtl ? 'right' : 'left' }]}>{step}</Text>
                 </View>
               ))}
-              <View style={[styles.helpActions, { flexDirection: rtl ? 'row-reverse' : 'row' }]}>
+              <View style={[styles.helpActions, { flexDirection: rowDirection(rtl) }]}>
                 <TouchableOpacity
                   style={styles.resultBtnSecondary}
                   onPress={() => setIosHelpVisible(false)}
@@ -911,7 +914,7 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
         <Modal visible={termsVisible} transparent onRequestClose={() => setTermsVisible(false)}>
           <Pressable style={styles.modalBackdrop} onPress={() => setTermsVisible(false)}>
             <Pressable style={styles.termsCard} onPress={() => {}}>
-              <View style={[styles.termsCardHeader, { flexDirection: rtl ? 'row-reverse' : 'row' }]}>
+              <View style={[styles.termsCardHeader, { flexDirection: rowDirection(rtl) }]}>
                 <Text style={styles.termsCardTitle}>{t.termsTitle}</Text>
                 <TouchableOpacity
                   onPress={() => setTermsVisible(false)}
