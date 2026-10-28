@@ -19,6 +19,13 @@ export function rowDirection(rtl) {
   return rtl ? 'row-reverse' : 'row';
 }
 
+// For the rare row that must keep the same physical order in every
+// language (e.g. the drawer always slides in from the left): undo the
+// browser's mirroring on web in RTL; native never mirrors.
+export function fixedRowDirection(rtl) {
+  return Platform.OS === 'web' && rtl ? 'row-reverse' : 'row';
+}
+
 export function applyDocumentDirection(lang) {
   if (Platform.OS !== 'web' || typeof document === 'undefined') return;
   document.documentElement.lang = lang;

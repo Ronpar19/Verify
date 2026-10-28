@@ -35,7 +35,7 @@ import * as Clipboard from 'expo-clipboard';
 import * as Localization from 'expo-localization';
 import { LANGUAGES, STRINGS, isRTL, getDeviceDefaultLanguage } from './translations';
 import { extractUrls } from './extractUrls';
-import { rowDirection, applyDocumentDirection } from './direction';
+import { rowDirection, fixedRowDirection, applyDocumentDirection } from './direction';
 import { getTermsBody, TERMS_UPDATED_DATE } from './terms';
 import { statusIconXml, statusLogoXml, STATUS_LOGO_ASPECT } from './statusIcons';
 import {
@@ -176,6 +176,12 @@ function normalizeUrl(url) {
   return /^[a-z][a-z0-9+.-]*:\/\//i.test(url) ? url : `https://${url}`;
 }
 
+// Wraps a URL/domain in Unicode LTR-isolate marks so it keeps its own
+// left-to-right order inside a Hebrew/Arabic sentence.
+function ltrIsolate(text) {
+  return `\u2066${text}\u2069`;
+}
+
 function hostnameOf(url) {
   try {
     return new URL(normalizeUrl(url)).hostname;
@@ -296,7 +302,7 @@ function ResultCard({ status, url, details, t, rtl, onReset }) {
   const palette = paletteFor(status);
   const title = statusA11yLabel(status, t);
   const subtitle =
-    details || (status === 'safe' ? t.safeSubtitle(hostnameOf(url)) : status === 'danger' ? t.dangerSubtitle : t.unknownSubtitle);
+    details || (status === 'safe' ? t.safeSubtitle(ltrIsolate(hostnameOf(url))) : status === 'danger' ? t.dangerSubtitle : t.unknownSubtitle);
 
   return (
     <View style={[styles.resultCard, { borderColor: palette.border }]}>
@@ -784,7 +790,7 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
         </ScrollView>
 
         <Modal visible={menuVisible} transparent onRequestClose={() => setMenuVisible(false)}>
-          <View style={styles.drawerRoot}>
+          <View style={[styles.drawerRoot, { flexDirection: fixedRowDirection(rtl) }]}>
             <View style={styles.drawerPanel}>
               <View style={[styles.drawerHeader, { flexDirection: rowDirection(rtl) }]}>
                 <Text style={styles.drawerTitle}>{t.downloadTitle}</Text>
@@ -859,14 +865,20 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
               {LANGUAGES.map((l) => (
                 <TouchableOpacity
                   key={l.code}
-                  style={styles.langRow}
+                  style={[styles.langRow, { flexDirection: rowDirection(rtl) }]}
                   onPress={() => handleSelectLanguage(l.code)}
                   accessibilityRole="button"
                   accessibilityLabel={l.name}
                   accessibilityState={{ selected: l.code === lang }}
                 >
                   <Text style={styles.langFlag}>{l.flag}</Text>
-                  <Text style={[styles.langName, l.code === lang && styles.langNameActive]}>
+                  <Text
+                    style={[
+                      styles.langName,
+                      { textAlign: rtl ? 'right' : 'left', writingDirection: l.rtl ? 'rtl' : 'ltr' },
+                      l.code === lang && styles.langNameActive,
+                    ]}
+                  >
                     {l.name}
                   </Text>
                   {l.code === lang && <Text style={styles.langCheck}>✓</Text>}
@@ -1033,13 +1045,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12, paddingBottom: 6,
   },
   langRow: {
-    flexDirection: 'row', alignItems: 'center',
+    flexDirection: 'row', alignItems: 'center', gap: 10,
     paddingVertical: 10, paddingHorizontal: 12, borderRadius: 10,
   },
-  langFlag: { fontSize: 20, marginRight: 10 },
+  langFlag: { fontSize: 20 },
   langName: { flex: 1, fontSize: 15, color: COLORS.text },
   langNameActive: { fontWeight: '700', color: COLORS.accent },
-  langCheck: { fontSize: 15, color: COLORS.accent, marginLeft: 6 },
+  langCheck: { fontSize: 15, color: COLORS.accent },
   logoBox: {
     width: 76, height: 76,
     marginTop: 8,
@@ -1058,7 +1070,8 @@ const styles = StyleSheet.create({
     borderRadius: 16, paddingHorizontal: 16, minHeight: 52,
   },
   inputIcon: { flexShrink: 0 },
-  input: { flex: 1, fontSize: 15, color: COLORS.text },
+  // The value is a URL: always laid out left-to-right, aligned by language.
+  input: { flex: 1, fontSize: 15, color: COLORS.text, writingDirection: 'ltr' },
   clearBtn: {
     width: 32, height: 32, borderRadius: 16,
     backgroundColor: 'rgba(20,20,40,0.06)', alignItems: 'center', justifyContent: 'center',
@@ -1127,7 +1140,7 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   linkRowTextBlock: { flex: 1, marginHorizontal: 10 },
-  linkRowUrl: { color: COLORS.text, fontSize: 14, fontWeight: '600' },
+  linkRowUrl: { color: COLORS.text, fontSize: 14, fontWeight: '600', writingDirection: 'ltr' },
   linkRowDetails: { color: COLORS.textSecondary, fontSize: 13, marginTop: 4, lineHeight: 18 },
   dividerRow: { width: '100%', maxWidth: 420, flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 20 },
   dividerLine: { flex: 1, height: 1, backgroundColor: COLORS.border },
