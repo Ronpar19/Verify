@@ -1263,6 +1263,26 @@ async function run() {
     check('first-hop timeout on a shortener -> uncertain, not safe', r.status === 'uncertain', r);
     __setRedirectBudgetForTests(null);
 
+    // Link content never reaches the logs on the SSRF path (literal and
+    // connect-time refusals carry the URL on the error object)
+    {
+      const logged = [];
+      const origError = console.error;
+      console.error = (...args) => logged.push(args.map(String).join(' '));
+      try {
+        global.fetch = webRiskListing([]);
+        await runLink('http://169.254.169.254/secret-path-xyz');
+        __setHopRequestForTests(null);
+        __setConnectLookupForTests(async () => [{ address: '10.0.0.5', family: 4 }]);
+        await runLink('http://private-log-check.example.com/secret-path-xyz');
+      } finally {
+        console.error = origError;
+        __setConnectLookupForTests(null);
+        __setHopRequestForTests(hopViaMockedFetch);
+      }
+      check('logs: no link content on the SSRF path', !logged.some((l) => l.includes('secret-path-xyz') || l.includes('private-log-check')), logged);
+    }
+
     // A literal private host is already "danger": Web Risk isn't spent on it
     webRiskUris.length = 0;
     global.fetch = webRiskListing([]);
