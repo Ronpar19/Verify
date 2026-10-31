@@ -106,14 +106,17 @@ test URL for the malware list to see the "danger" path too:
 → `.env` and fill in your key) so you can test against `localhost`
 before deploying.
 
-**Test suite:** `test.mjs` exercises the handler's logic end-to-end
+**Test suites:** `test.mjs` exercises the handler's logic end-to-end
 (method/input validation, safe/danger parsing, redirect resolution,
-the SSRF guard, and error fallbacks) against a mocked `fetch`, so it
-runs offline with no API key or network needed:
+the connect-time SSRF guard on every hop, the redirect-chain time
+budget, and error fallbacks) against mocked network/DNS/RDAP, so it
+runs offline with no API key or network needed. A second, smaller
+suite covers the app's URL extraction:
 ```bash
-node test.mjs
+node test.mjs                                    # backend, from repo root
+cd mobile && node test-extract-urls.mjs
 ```
-Worth re-running after any change to `check-link.js`.
+Worth re-running both before every deploy.
 
 ## Part C — Set up the Expo frontend
 
@@ -194,16 +197,15 @@ works reliably as a real native API. The user copies the link first
 
 ## Security notes (read before shipping)
 
-- **SSRF guard is a literal-hostname check**, not a DNS-resolution
-  check. It blocks `http://127.0.0.1/...` and similar written
-  directly, but a determined attacker could in principle use DNS
-  rebinding (a domain that resolves to a private IP) to get around
-  it. Given Vercel functions run in an isolated, ephemeral
-  environment with no access to other infrastructure, the blast
-  radius of that gap is low — but if this ever handles anything more
-  sensitive, resolve the hostname yourself with Node's
-  `dns.promises.lookup()` and check the *resolved* IP before
-  fetching, on every hop.
+- **SSRF guard checks the resolved IP at connect time, on every
+  hop.** Redirects are followed over `node:http`/`node:https` with a
+  custom DNS `lookup`: every address returned for the host must be
+  public unicast, or the connection is refused before a socket opens.
+  Because the check and the connection share one resolution, DNS
+  rebinding can't bypass it. Private IPs written literally into a
+  link (in any notation, IPv4 or IPv6) are rejected before that. If
+  you change the redirect code, keep the `lookup` hook — swapping
+  back to `fetch()` would silently reopen the rebinding gap.
 - **The endpoint is public**, protected by per-IP rate limiting and a
   shared-secret header (`x-app-secret`) rather than a full auth
   system — proportionate for this app's threat model, not a

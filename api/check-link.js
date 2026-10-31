@@ -22,16 +22,29 @@
 // (pre-i18n) Hebrew strings, so existing callers and existing tests are
 // unaffected.
 
+import dns from 'node:dns';
+import http from 'node:http';
+import https from 'node:https';
 import { Ratelimit } from '@upstash/ratelimit';
+import ipaddr from 'ipaddr.js';
 import psl from 'psl';
 import punycode from 'punycode/punycode.js';
 import { getRedis } from './_lib/redis.js';
 import { recordCheck } from './_lib/stats.js';
-import { infrastructureAnalysis } from './_lib/infrastructure.js';
+import { infrastructureAnalysis, isNonPublicIp } from './_lib/infrastructure.js';
 
 const THREAT_TYPES = ['MALWARE', 'SOCIAL_ENGINEERING', 'UNWANTED_SOFTWARE'];
 const MAX_REDIRECTS = 5;
 const FETCH_TIMEOUT_MS = 6000;
+
+// Hard cap on the WHOLE redirect chain, not just one hop. Without it, 5
+// hops x (HEAD + GET fallback) x 6s could run ~60s -- past vercel.json's
+// maxDuration (30s), so Vercel would kill the function and the client
+// would get a bare 504 instead of a cautious 200. 10s here + Web Risk's
+// own 6s timeout (infrastructure runs concurrently with it, 1.8s budget)
+// keeps the worst case well under 30s. When the budget runs out we stop
+// following and check whatever URL we've reached so far.
+const REDIRECT_BUDGET_MS = 10000;
 
 // Per-IP rate limit: protects the free Web Risk quota (100k calls/month)
 // from a scraped/leaked endpoint URL being hammered. See README "Security
@@ -91,7 +104,7 @@ const MESSAGES = {
     safeWebRisk: 'לא נמצאו איומים ידועים בקישור זה לפי Google Web Risk',
     heuristicOnlyPrefix: '(בדיקה בסיסית בלבד — Google Web Risk לא היה זמין כרגע) ',
     bothSafeSuffix: ', וגם מבנה הקישור עצמו לא מעורר חשד',
-    uncertainPrefix: 'לא נמצא ברשימות הידועות של Google, אך מבנה הקישור מעורר חשד: ',
+    uncertainPrefix: 'לא נמצא ברשימות הידועות של Google, אבל כדאי להיזהר: ',
     heuristicDangerPrefix: 'לא נמצא (עדיין) ברשימות הידועות של Google, אך מבנה הקישור תואם דפוס הונאה מוכר וודאי: ',
     heuristicReasons: {
       privateHost: 'הכתובת מפנה לרשת פרטית/פנימית — חריג מאוד עבור קישור שנשלח אליך',
@@ -110,6 +123,8 @@ const MESSAGES = {
       suspiciousEncoding: 'הכתובת מכילה קידוד תווים חריג שעלול להסתיר את תוכנה האמיתי',
       urlComplexity: 'מבנה הכתובת מורכב וארוך באופן חריג',
       randomHostname: 'שם המארח נראה אקראי באופן חריג',
+      ipLikeDomain: 'תחילת שם הדומיין נראית כמו כתובת IP — ייתכן שזה ניסיון להטעות במבט מהיר',
+      redirectIncomplete: 'לא הצלחנו לעקוב אחרי שרשרת ההפניות עד היעד הסופי, ולכן היעד האמיתי לא נבדק',
       comboBonus: 'השילוב של כמה סימנים חשודים יחד תואם דפוס הונאה מוכר',
       noneFound: 'לא זוהו סימנים חשודים בולטים במבנה הקישור',
       parseFailed: 'לא הצלחנו לנתח את מבנה הכתובת',
@@ -129,7 +144,7 @@ const MESSAGES = {
     safeWebRisk: 'No known threats were found for this link by Google Web Risk',
     heuristicOnlyPrefix: '(Basic check only — Google Web Risk was unavailable) ',
     bothSafeSuffix: ", and the link's own structure is not suspicious either",
-    uncertainPrefix: "Not found on Google's known lists, but the link's structure looks suspicious: ",
+    uncertainPrefix: "Not found on Google's known lists, but caution is advised: ",
     heuristicDangerPrefix: "Not found on Google's known lists yet, but the link's structure matches a well-known, high-confidence scam pattern: ",
     heuristicReasons: {
       privateHost: 'The address points to a private/internal network — highly unusual for a link sent to you',
@@ -148,6 +163,8 @@ const MESSAGES = {
       suspiciousEncoding: 'The address contains unusual character encoding that may be hiding its real content',
       urlComplexity: 'The URL structure is unusually long and complex',
       randomHostname: 'The hostname looks unusually random',
+      ipLikeDomain: 'The start of the domain name looks like an IP address — possibly meant to mislead at a glance',
+      redirectIncomplete: 'We could not follow the redirect chain all the way to its final destination, so the real destination was not checked',
       comboBonus: 'The combination of several suspicious signals together matches a known phishing pattern',
       noneFound: "No notable suspicious signs were detected in the link's structure",
       parseFailed: 'We could not parse the structure of this address',
@@ -167,7 +184,7 @@ const MESSAGES = {
     safeWebRisk: 'Известных угроз для этой ссылки не найдено (по данным Google Web Risk)',
     heuristicOnlyPrefix: '(Только базовая проверка — Google Web Risk был недоступен) ',
     bothSafeSuffix: ', и структура самой ссылки также не вызывает подозрений',
-    uncertainPrefix: 'Не найдено в известных списках Google, но структура ссылки выглядит подозрительно: ',
+    uncertainPrefix: 'Не найдено в известных списках Google, но стоит быть осторожнее: ',
     heuristicDangerPrefix: 'Пока не найдено в известных списках Google, но структура ссылки соответствует хорошо известной, высокодостоверной схеме мошенничества: ',
     heuristicReasons: {
       privateHost: 'Адрес указывает на частную/внутреннюю сеть — крайне необычно для присланной вам ссылки',
@@ -186,6 +203,8 @@ const MESSAGES = {
       suspiciousEncoding: 'Адрес содержит необычное кодирование символов, которое может скрывать его настоящее содержимое',
       urlComplexity: 'Структура ссылки необычно длинная и сложная',
       randomHostname: 'Имя хоста выглядит необычно случайным',
+      ipLikeDomain: 'Начало доменного имени выглядит как IP-адрес — возможно, чтобы ввести в заблуждение при беглом взгляде',
+      redirectIncomplete: 'Не удалось пройти всю цепочку перенаправлений до конечного адреса, поэтому настоящий адрес назначения не проверен',
       comboBonus: 'Сочетание нескольких подозрительных признаков вместе соответствует известной схеме фишинга',
       noneFound: 'Явных подозрительных признаков в структуре ссылки не обнаружено',
       parseFailed: 'Не удалось разобрать структуру этого адреса',
@@ -205,7 +224,7 @@ const MESSAGES = {
     safeWebRisk: "Aucune menace connue n'a été trouvée pour ce lien par Google Web Risk",
     heuristicOnlyPrefix: '(Vérification de base uniquement — Google Web Risk était indisponible) ',
     bothSafeSuffix: ", et la structure du lien lui-même n'est pas non plus suspecte",
-    uncertainPrefix: "Introuvable dans les listes connues de Google, mais la structure du lien semble suspecte : ",
+    uncertainPrefix: "Introuvable dans les listes connues de Google, mais la prudence est conseillée : ",
     heuristicDangerPrefix: "Introuvable pour l'instant dans les listes connues de Google, mais la structure du lien correspond à un schéma d'arnaque bien connu et à haute confiance : ",
     heuristicReasons: {
       privateHost: "L'adresse pointe vers un réseau privé/interne — très inhabituel pour un lien qui vous a été envoyé",
@@ -224,6 +243,8 @@ const MESSAGES = {
       suspiciousEncoding: "L'adresse contient un encodage de caractères inhabituel qui pourrait dissimuler son contenu réel",
       urlComplexity: 'La structure du lien est anormalement longue et complexe',
       randomHostname: "Le nom d'hôte semble anormalement aléatoire",
+      ipLikeDomain: "Le début du nom de domaine ressemble à une adresse IP — peut-être pour tromper au premier coup d'œil",
+      redirectIncomplete: "Nous n'avons pas pu suivre la chaîne de redirections jusqu'à sa destination finale, la vraie destination n'a donc pas été vérifiée",
       comboBonus: 'La combinaison de plusieurs signes suspects correspond à un schéma de phishing connu',
       noneFound: "Aucun signe suspect notable n'a été détecté dans la structure du lien",
       parseFailed: "Nous n'avons pas pu analyser la structure de cette adresse",
@@ -243,7 +264,7 @@ const MESSAGES = {
     safeWebRisk: 'لم يتم العثور على تهديدات معروفة لهذا الرابط وفقًا لـ Google Web Risk',
     heuristicOnlyPrefix: '(فحص أساسي فقط — لم تكن خدمة Google Web Risk متاحة) ',
     bothSafeSuffix: '، كما أن بنية الرابط نفسها لا تثير الشبهة',
-    uncertainPrefix: 'لم يُعثر عليه في قوائم Google المعروفة، لكن بنية الرابط تثير الشبهة: ',
+    uncertainPrefix: 'لم يُعثر عليه في قوائم Google المعروفة، لكن يُنصح بالحذر: ',
     heuristicDangerPrefix: 'لم يُعثر عليه بعد في قوائم Google المعروفة، لكن بنية الرابط تطابق نمط احتيال معروف وعالي الموثوقية: ',
     heuristicReasons: {
       privateHost: 'يشير العنوان إلى شبكة خاصة/داخلية — وهذا أمر غير معتاد جدًا لرابط أُرسل إليك',
@@ -262,27 +283,14 @@ const MESSAGES = {
       suspiciousEncoding: 'يحتوي العنوان على ترميز أحرف غير معتاد قد يُخفي محتواه الحقيقي',
       urlComplexity: 'بنية الرابط طويلة ومعقدة بشكل غير معتاد',
       randomHostname: 'اسم المضيف يبدو عشوائيًا بشكل غير معتاد',
+      ipLikeDomain: 'بداية اسم النطاق مبنية لتبدو كعنوان IP — ربما بهدف التضليل للوهلة الأولى',
+      redirectIncomplete: 'تعذّر تتبّع سلسلة إعادة التوجيه حتى الوجهة النهائية، لذلك لم يتم فحص الوجهة الحقيقية',
       comboBonus: 'يتطابق مزيج عدة علامات مشبوهة معًا مع نمط تصيّد احتيالي معروف',
       noneFound: 'لم يتم رصد علامات مشبوهة واضحة في بنية الرابط',
       parseFailed: 'تعذّر تحليل بنية هذا العنوان',
     },
   },
 };
-
-// Basic SSRF guard: refuse to let the server fetch (directly, or via a
-// redirect chain) anything pointing at loopback / private / link-local
-// ranges. This is a literal-string check, not a DNS-resolution check —
-// see README "Security notes" for the limitation.
-const PRIVATE_HOST_PATTERNS = [
-  /^localhost$/i,
-  /^127\./,
-  /^0\.0\.0\.0$/,
-  /^10\./,
-  /^192\.168\./,
-  /^172\.(1[6-9]|2\d|3[01])\./,
-  /^169\.254\./,
-  /^\[?::1\]?$/
-];
 
 const SHORTENERS = ['bit.ly','tinyurl.com','t.co','goo.gl','ow.ly','is.gd','buff.ly','rebrand.ly','cutt.ly','shorte.st','tiny.cc','rb.gy','shorturl.at','t.ly'];
 const SUSPICIOUS_TLDS = ['.tk','.ml','.ga','.cf','.gq','.xyz','.top','.click','.work','.loan','.win','.rest'];
@@ -477,10 +485,11 @@ export default async function handler(req, res) {
     return res.status(400).json({ status: 'unknown', details: 'Missing "link" in request body' });
   }
 
-  let finalUrl;
+  let finalUrl, chain;
   try {
     const normalized = normalizeUrl(link.trim());
-    finalUrl = await resolveFinalUrl(normalized);
+    chain = await resolveFinalUrl(normalized);
+    finalUrl = chain.url;
   } catch (err) {
     console.error('check-link error (resolve):', err);
     if (err && err.ssrf) {
@@ -489,19 +498,47 @@ export default async function handler(req, res) {
       // instead of a content-free "unknown".
       const heuristic = heuristicAnalysis(err.attemptedUrl, lang);
       const statusMap = { safe: 'uncertain', uncertain: 'uncertain', unsafe: 'danger' };
-      return sendVerdict(req, res, statusMap[heuristic.verdict] || 'uncertain', m.ssrfPrefix + heuristic.reasons.join('; '));
+      let reasons = heuristic.reasons;
+      let status = statusMap[heuristic.verdict] || 'uncertain';
+      if (err.refusedAtConnect) {
+        // The hostname looked public, but the DNS answer our own connection
+        // was about to use pointed at a private/internal address, so we
+        // refused to connect (guardedLookup). That blocks the SSRF for
+        // real, but the verdict still treats it like any other DNS-derived
+        // private IP: never an automatic "danger" -- only a private host
+        // written literally in the URL is (heuristicAnalysis's privateHost).
+        // A domain's DNS is the domain owner's to change and can be
+        // rebound, so it isn't the same no-legitimate-use pattern: the
+        // answer is "uncertain". A high score from weak signals doesn't
+        // escalate it either; only a high-confidence pattern can -- the
+        // heuristic's own (e.g. an "@" trick), or a raw public IP on an
+        // earlier hop of this chain (same rule as the normal path below).
+        const r = m.heuristicReasons;
+        reasons = [r.privateHost, ...reasons.filter((x) => x !== r.noneFound && x !== r.privateHost)];
+        if (err.rawIpUrl && !reasons.includes(r.publicIp)) reasons.push(r.publicIp);
+        status = heuristic.highConfidence || err.rawIpUrl ? 'danger' : 'uncertain';
+      }
+      // Not already "danger"? Then still ask Web Risk about every URL in the
+      // chain, the blocked one included -- a call to Google's API, never a
+      // connection to the URL itself. Without it, a listed phishing domain
+      // could dodge Web Risk just by answering our datacenter's DNS with a
+      // private IP. (Skipped when the answer is already "danger", to spare
+      // quota; a failed call leaves the answer as it is.)
+      if (status !== 'danger') {
+        const blockedChainRisk = await checkWebRiskChain(err.visited || [err.attemptedUrl], lang);
+        if (blockedChainRisk && blockedChainRisk.status === 'danger') {
+          return sendVerdict(req, res, 'danger', blockedChainRisk.details);
+        }
+      }
+      return sendVerdict(req, res, status, m.ssrfPrefix + reasons.join('; '));
     }
     return sendVerdict(req, res, 'unknown', m.genericError);
   }
 
-  const apiKey = process.env.GOOGLE_API_KEY;
-  const webRiskPromise = apiKey
-    ? checkWebRisk(finalUrl, apiKey, lang).catch((err) => {
-        console.error('check-link error (webrisk):', err);
-        return null; // fall through to heuristic-only below
-      })
-    : Promise.resolve(null);
-  if (!apiKey) console.error('GOOGLE_API_KEY is not set in the environment');
+  // Every URL the chain passed through, not just the final one: a listed
+  // phishing URL that "cloaks" by redirecting datacenter traffic (us) to
+  // google.com must still come back "danger". See checkWebRiskChain().
+  const webRiskPromise = checkWebRiskChain(chain.visited, lang);
 
   // Started concurrently with Web Risk -- both depend only on finalUrl and
   // have no dependency on each other. If Web Risk comes back "danger"
@@ -547,7 +584,19 @@ export default async function handler(req, res) {
   // as long as webRiskPromise took (they started together), so this await
   // typically adds little to no extra wall-clock time on top of Web Risk's
   // own latency.
-  const heuristic = heuristicAnalysis(finalUrl, lang);
+  let heuristic = heuristicAnalysis(finalUrl, lang);
+  if (chain.rawIpUrl && !heuristic.signals.includes('publicIp')) {
+    // A raw IP earlier in the chain, redirecting on to a domain -- still
+    // the same high-confidence pattern (see resolveFinalUrl).
+    const r = m.heuristicReasons;
+    heuristic = {
+      ...heuristic,
+      score: heuristic.score + 4,
+      reasons: [r.publicIp, ...heuristic.reasons.filter((x) => x !== r.noneFound)],
+      highConfidence: true,
+      signals: [...heuristic.signals, 'publicIp'],
+    };
+  }
   const infra = await infraPromise;
 
   // Combine into ONE score/reasons system, not a second verdict structure
@@ -556,7 +605,15 @@ export default async function handler(req, res) {
   // same thresholds heuristicAnalysis() itself uses internally.
   const combinedScore = heuristic.score + infra.score;
   const combinedReasons = [...heuristic.reasons, ...infra.reasons];
-  const combinedVerdict = combinedScore >= 5 ? 'unsafe' : (combinedScore >= 2 ? 'uncertain' : 'safe');
+  let combinedVerdict = combinedScore >= 5 ? 'unsafe' : (combinedScore >= 2 ? 'uncertain' : 'safe');
+  // We stopped following redirects before reaching the destination, so
+  // what we checked may be a clean-looking stepping stone. Never "safe".
+  if (!chain.complete) {
+    const noneFoundAt = combinedReasons.indexOf(m.heuristicReasons.noneFound);
+    if (noneFoundAt !== -1) combinedReasons.splice(noneFoundAt, 1);
+    combinedReasons.push(m.heuristicReasons.redirectIncomplete);
+    if (combinedVerdict === 'safe') combinedVerdict = 'uncertain';
+  }
 
   if (!webRiskResult) {
     // Web Risk unavailable (bad/missing key, network error, quota) — the
@@ -599,7 +656,19 @@ export default async function handler(req, res) {
   // dangerous .il link is still caught: either Web Risk flags it (handled
   // earlier) or the heuristic finds a highConfidence pattern (handled just
   // above), neither of which this bypasses.
-  if (isIsraeliDomain(safeHostname(finalUrl))) {
+  // The exemption covers generic noise ONLY, decided by signal TYPE, not
+  // by score (a lone brand keyword on "mizrahi-catering.co.il" scores
+  // higher than "leumi-verify.co.il", yet only the second is mimicry).
+  // It's an allowlist on purpose: IL_WEAK_SIGNALS names the noise; any
+  // other heuristic signal, any infrastructure signal (private DNS
+  // destination, young domain) or an incomplete redirect chain keeps the
+  // result at "uncertain" — so a signal added later opts out by default.
+  if (
+    isIsraeliDomain(safeHostname(finalUrl)) &&
+    chain.complete &&
+    heuristic.signals.every((sig) => IL_WEAK_SIGNALS.has(sig)) &&
+    infra.reasons.length === 0
+  ) {
     return sendVerdict(req, res, 'safe', webRiskResult.details);
   }
 
@@ -618,9 +687,41 @@ function safeHostname(urlString) {
   try { return new URL(urlString).hostname; } catch (e) { return null; }
 }
 
+// SSRF guard, layer 1 (literal hosts): refuse to let the server fetch
+// (directly, or via a redirect chain) any host that is literally a
+// non-public address. Classified with ipaddr.js (same helper as the
+// infrastructure layer) rather than hand-written prefixes, so every
+// non-"unicast" range is covered: loopback, RFC 1918, link-local, CGNAT
+// (100.64/10), 0/8, unique-local fc00::/7, fe80::/10, ::, and IPv4-mapped
+// IPv6 ([::ffff:7f00:1] is loopback). The WHATWG URL parser has already
+// canonicalized odd IPv4 spellings (0x7f.1, 2130706433 -> 127.0.0.1); a
+// trailing root dot ("localhost.") is stripped here since it names the
+// same host. Hostnames that only *resolve* to a private address are
+// layer 2's job — see guardedLookup().
 function isPrivateHost(hostname) {
-  return PRIVATE_HOST_PATTERNS.some((re) => re.test(hostname));
+  if (!hostname) return false;
+  const h = hostname.toLowerCase().replace(/\.+$/, '');
+  if (h === 'localhost' || h.endsWith('.localhost')) return true;
+  return isIpLiteral(h) && isNonPublicIp(stripBrackets(h));
 }
+
+function stripBrackets(h) {
+  return h.startsWith('[') && h.endsWith(']') ? h.slice(1, -1) : h;
+}
+
+// True when the (already URL-parsed) host is an IP address rather than a
+// domain name: dotted-quad IPv4, or IPv6 in brackets.
+function isIpLiteral(hostname) {
+  if (!hostname) return false;
+  const h = stripBrackets(hostname.toLowerCase().replace(/\.+$/, ''));
+  return ipaddr.IPv4.isValidFourPartDecimal(h) || (hostname.startsWith('[') && ipaddr.IPv6.isValid(h));
+}
+
+// Heuristic signals the .il exemption treats as generic noise. A lone
+// brand keyword is here (Mizrahi is a common surname, "discount"/"bank"
+// are ordinary words); a brand keyword next to urgent wording is not --
+// heuristicAnalysis reports that as its own 'brandWithUrgency' signal.
+const IL_WEAK_SIGNALS = new Set(['insecureHttp', 'urgentWords', 'urlComplexity', 'manySubdomains', 'brandImpersonation', 'randomHostname']);
 
 // True for any hostname under Israel's ccTLD (.il itself, or any label
 // under it: .co.il, .org.il, .gov.il, .net.il, .ac.il, ...). A literal dot
@@ -641,12 +742,165 @@ async function fetchWithTimeout(url, options) {
   }
 }
 
+// ---------- redirect hops (SSRF guard, layer 2: connect-time DNS check) ----------
+//
+// A public-looking hostname can resolve to 169.254.169.254 or 10.x, and
+// the literal check in isPrivateHost() can't see that. Checking with a
+// separate DNS lookup first would be TOCTOU (the connection re-resolves,
+// and a rebinding domain can answer differently). Instead each hop uses
+// node:http(s) with `lookup: guardedLookup`, so the address check runs on
+// the very answer the socket is about to connect to — if any address is
+// non-public we refuse before connecting. node:http's own `lookup` option
+// does this with no extra dependency (global fetch can't take one without
+// adding the undici package).
+let hopRequestOverride = null; // test-only seam, see __setHopRequestForTests
+let connectLookupOverride = null; // test-only seam, see __setConnectLookupForTests
+let redirectBudgetMs = REDIRECT_BUDGET_MS;
+
+// Test-only hooks. test.mjs routes hops through its mocked global fetch
+// (so no live network calls), swaps in a fake DNS answer for the
+// connect-time guard, and shrinks the redirect budget so the "slow chain"
+// test doesn't take 10 real seconds.
+export function __setHopRequestForTests(fn) {
+  hopRequestOverride = fn;
+}
+export function __setConnectLookupForTests(fn) {
+  connectLookupOverride = fn;
+}
+export function __setRedirectBudgetForTests(ms) {
+  redirectBudgetMs = ms == null ? REDIRECT_BUDGET_MS : ms;
+}
+
+// Same callback contract as dns.lookup, which is what net.connect expects
+// from a custom `lookup` (it may ask for { all: true } when it races IPv4/
+// IPv6 via autoSelectFamily). Exported under a test-only name so the
+// allow/deny decision can be tested without opening a socket.
+function guardedLookup(hostname, options, callback) {
+  if (typeof options === 'function') { callback = options; options = {}; }
+  const resolve = connectLookupOverride || ((h) => dns.promises.lookup(h, { all: true, verbatim: true }));
+  Promise.resolve()
+    .then(() => resolve(hostname))
+    .then((all) => {
+      let addrs = Array.isArray(all) ? all : [];
+      if (options && (options.family === 4 || options.family === 6)) addrs = addrs.filter((a) => a.family === options.family);
+      if (!addrs.length) {
+        const notFound = new Error('No addresses for ' + hostname);
+        notFound.code = 'ENOTFOUND';
+        return callback(notFound);
+      }
+      // Any non-public answer blocks the hop, even alongside public ones:
+      // the socket may pick either, and a mixed answer is itself a
+      // rebinding tell.
+      if (addrs.some((a) => isNonPublicIp(a.address))) {
+        const blocked = new Error('Refusing to connect: ' + hostname + ' resolves to a private/internal address');
+        blocked.code = 'ESSRFBLOCKED';
+        blocked.ssrf = true;
+        blocked.refusedAtConnect = true;
+        return callback(blocked);
+      }
+      if (options && options.all) return callback(null, addrs);
+      return callback(null, addrs[0].address, addrs[0].family);
+    })
+    .catch((err) => callback(err));
+}
+export { guardedLookup as __guardedLookupForTests };
+
+// Tagged so resolveFinalUrl can tell "gave up waiting" (destination
+// unknown) from "the destination itself is unreachable".
+function hopTimeoutError(message) {
+  const err = new Error(message);
+  err.code = 'EHOPTIMEOUT';
+  return err;
+}
+
+// One HEAD/GET with no redirect following, shaped like the bit of a fetch
+// Response resolveFinalUrl() reads ({ status, headers.get }). The body is
+// never read — only the status line and Location header matter here.
+function guardedHop(url, method, timeoutMs, lookup = guardedLookup) {
+  return new Promise((resolve, reject) => {
+    let req, timer;
+    const done = (fn) => (v) => { clearTimeout(timer); fn(v); };
+    resolve = done(resolve);
+    reject = done(reject);
+    try {
+      const u = new URL(url);
+      const mod = u.protocol === 'https:' ? https : u.protocol === 'http:' ? http : null;
+      if (!mod) throw new Error('Unsupported protocol ' + u.protocol);
+      req = mod.request(u, { method, lookup }, (resp) => {
+        const headers = resp.headers;
+        resolve({
+          status: resp.statusCode,
+          headers: { get: (name) => { const v = headers[String(name).toLowerCase()]; return Array.isArray(v) ? v[0] : (v ?? null); } },
+        });
+        resp.destroy(); // GET fallback: drop the body unread
+      });
+    } catch (e) {
+      return reject(e);
+    }
+    // An absolute deadline, not req.setTimeout (which is only an idle
+    // timer -- a server trickling a byte at a time would never trip it).
+    // Destroying the request also frees the socket when hop()'s race
+    // gives up first.
+    timer = setTimeout(() => req.destroy(hopTimeoutError('Hop timed out')), timeoutMs);
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+// Test-only: lets test.mjs drive the real request/timer/header code
+// against a local http.createServer. The guard itself would (correctly)
+// refuse 127.0.0.1, so those tests pass a plain lookup instead.
+export { guardedHop as __guardedHopForTests };
+
+// Bounds one hop by both its own timeout and what's left of the chain's
+// budget. The race is a backstop on top of guardedHop's own socket
+// timeout, so a hop can never outlive the budget however it misbehaves.
+async function hop(url, method, deadline) {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw hopTimeoutError('Redirect budget exhausted');
+  const timeoutMs = Math.min(FETCH_TIMEOUT_MS, remaining);
+  const request = hopRequestOverride
+    ? Promise.resolve().then(() => hopRequestOverride(url, { method, redirect: 'manual' }))
+    : guardedHop(url, method, timeoutMs);
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(hopTimeoutError('Hop timed out')), timeoutMs);
+  });
+  try {
+    return await Promise.race([request, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // Follows redirects manually (HEAD, falling back to GET if a server
 // rejects HEAD) so shortened links (bit.ly, tinyurl, ...) get checked at
 // their real destination instead of at the shortener's own domain.
+//
+// Returns { url, complete, rawIpUrl, visited } (`visited`: every URL in
+// the chain, start to final, for Web Risk):
+// - `complete` is false when we gave up without seeing the destination
+//   (a hop after the first redirect timed out, the budget ran out, or it
+//   was still redirecting after MAX_REDIRECTS). The handler then never answers "safe" — the
+//   URL we stopped at may just be a stepping stone. A plain network error
+//   (refused, NXDOMAIN) still counts as complete: that URL IS where the
+//   link leads, it's just unreachable.
+// - A URL carrying userinfo ("paypal.com@evil.ru") is never connected
+//   to: the chain stops there, so it becomes the URL the heuristic checks
+//   and the "@" trick can't be laundered through a redirect to a clean
+//   site (node:http, unlike fetch, happily sends such a request).
+// - `rawIpUrl` is the first intermediate hop whose host was a raw public
+//   IP. Same idea: a redirect from http://1.2.3.4/ to a clean domain must
+//   not hide the raw-IP pattern. (Private literals never get this far --
+//   they throw the SSRF error below.)
 async function resolveFinalUrl(startUrl) {
   let current = startUrl;
+  let complete = false;
+  let rawIpUrl = null;
+  const visited = [];
+  const deadline = Date.now() + redirectBudgetMs;
   for (let i = 0; i < MAX_REDIRECTS; i++) {
+    visited.push(current);
     const hostname = safeHostname(current);
     if (!hostname || isPrivateHost(hostname)) {
       // The actual SSRF risk this blocks: without this check, a malicious
@@ -659,32 +913,90 @@ async function resolveFinalUrl(startUrl) {
       const blocked = new Error('Refusing to follow a redirect to a private/internal address');
       blocked.ssrf = true;
       blocked.attemptedUrl = current;
+      blocked.visited = visited;
+      blocked.rawIpUrl = rawIpUrl;
       throw blocked;
     }
+    if (hasUserinfo(current)) { complete = true; break; }
+    if (!rawIpUrl && isIpLiteral(hostname)) rawIpUrl = current;
 
     let response;
     try {
-      response = await fetchWithTimeout(current, { method: 'HEAD', redirect: 'manual' });
+      response = await hop(current, 'HEAD', deadline);
       if (response.status === 405) {
-        response = await fetchWithTimeout(current, { method: 'GET', redirect: 'manual' });
+        response = await hop(current, 'GET', deadline);
       }
     } catch (e) {
-      break; // network error or timeout — check whatever URL we have so far
+      if (e && e.ssrf) {
+        // guardedLookup refused the connection (layer 2) — stop, and let
+        // the handler report it (see refusedAtConnect there).
+        e.attemptedUrl = current;
+        e.visited = visited;
+        e.rawIpUrl = rawIpUrl;
+        throw e;
+      }
+      // A timeout on the very first hop skipped nothing we know of: the
+      // link itself is what we check (Israeli banks/gov sites often just
+      // drop non-Israeli traffic, so this is common and not suspicious).
+      // Only a timeout after at least one redirect leaves the chain cut.
+      complete = i === 0 || !(e && e.code === 'EHOPTIMEOUT');
+      break; // network error, timeout or spent budget — check whatever URL we have so far
     }
 
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get('location');
-      if (!location) break;
+      if (!location) { complete = true; break; }
+      let next;
       try {
-        current = new URL(location, current).toString();
+        next = new URL(location, current);
       } catch (e) {
+        complete = true;
         break;
       }
+      // Only ever follow into http(s). Anything else (ftp:, data:,
+      // javascript:, file:) ends the chain at the last web URL.
+      if (next.protocol !== 'http:' && next.protocol !== 'https:') { complete = true; break; }
+      current = next.toString();
     } else {
+      complete = true;
       break;
     }
   }
-  return current;
+  if (visited[visited.length - 1] !== current) visited.push(current); // ran out of hops: the last Location was never visited
+  return { url: current, complete, rawIpUrl, visited };
+}
+
+function hasUserinfo(urlString) {
+  try {
+    const u = new URL(urlString);
+    return !!(u.username || u.password);
+  } catch (e) {
+    return false;
+  }
+}
+
+// Asks Web Risk about every distinct URL in the redirect chain, in
+// parallel (so no extra wall-clock time over a single call). "danger" on
+// ANY of them wins. Otherwise: if any call failed, the whole answer counts
+// as "Web Risk unavailable" (null) -- the same cautious, heuristic-only
+// path a single failed call takes today -- since a clean answer for the
+// final URL alone can't vouch for an unchecked hop. With no redirect this
+// is exactly one call, as before.
+async function checkWebRiskChain(urls, lang) {
+  const apiKey = process.env.GOOGLE_API_KEY;
+  if (!apiKey) {
+    console.error('GOOGLE_API_KEY is not set in the environment');
+    return null;
+  }
+  const unique = [...new Set(urls)];
+  const results = await Promise.all(unique.map((u) => checkWebRisk(u, apiKey, lang).catch((err) => {
+    console.error('check-link error (webrisk):', err);
+    return null;
+  })));
+  const danger = results.find((r) => r && r.status === 'danger');
+  if (danger) return danger;
+  if (results.some((r) => !r)) return null;
+  return results[results.length - 1];
 }
 
 async function checkWebRisk(url, apiKey, lang) {
@@ -934,6 +1246,11 @@ export function heuristicAnalysis(rawUrl, lang) {
   const m = MESSAGES[lang];
   const r = m.heuristicReasons;
   const reasons = [];
+  // Machine-readable twin of `reasons` (one key per signal that fired),
+  // so callers can reason about signal TYPES without matching localized
+  // text -- the handler's .il exemption is an allowlist over these.
+  const signals = [];
+  const flag = (key, text) => { signals.push(key); reasons.push(text); };
   let score = 0;
   // True only for patterns that have essentially no legitimate use in a
   // link sent to an end user (the userinfo "@" trick, a raw IP address
@@ -948,35 +1265,52 @@ export function heuristicAnalysis(rawUrl, lang) {
 
   let url;
   try { url = new URL(toParse); }
-  catch (e) { return { verdict: 'uncertain', reasons: [r.parseFailed], highConfidence: false }; }
+  catch (e) { return { verdict: 'uncertain', reasons: [r.parseFailed], highConfidence: false, score: 2, signals: ['parseFailed'] }; }
 
   const hostname = url.hostname.toLowerCase();
   const full = rawUrl.toLowerCase();
 
   if (isPrivateHost(hostname)) {
-    score += 6; reasons.push(r.privateHost); highConfidence = true;
-  } else if (/^(\d{1,3}\.){3}\d{1,3}$/.test(hostname)) {
-    score += 4; reasons.push(r.publicIp); highConfidence = true;
+    score += 6; flag('privateHost', r.privateHost); highConfidence = true;
+  } else if (isIpLiteral(hostname)) {
+    // Decided by actually parsing the host as an IP (IPv4 or bracketed
+    // IPv6), not by a prefix regex -- "10.example.co.il" is a domain.
+    // Hex/decimal/short IPv4 spellings arrive here already canonicalized
+    // by the URL parser.
+    score += 4; flag('publicIp', r.publicIp); highConfidence = true;
+  } else if (/^(\d{1,3}\.){4}/.test(hostname)) {
+    // A domain whose leading labels spell an IPv4 address
+    // ("192.168.1.1.evil.com", "127.0.0.1.nip.io") -- made to look like an
+    // IP at a glance, or a wildcard-DNS service that maps it to that IP.
+    // Suspicious, but it IS a domain, so a score only, never highConfidence.
+    score += 3; flag('ipLikeDomain', r.ipLikeDomain);
   }
-  if (rawUrl.indexOf('@') !== -1 && !/^mailto:/i.test(rawUrl)) {
-    score += 5; reasons.push(r.atSign); highConfidence = true;
+  // The "@" trick only exists in the authority (userinfo) part:
+  // "paypal.com@evil.ru" goes to evil.ru. An "@" in the path or query
+  // ("?email=a@b.com" on an unsubscribe link) is ordinary and must not
+  // force "danger". The regex also catches an empty userinfo ("http://@x"),
+  // which leaves url.username blank.
+  if ((url.username || url.password || /^https?:\/\/[^/?#\\]*@/i.test(toParse)) && !/^mailto:/i.test(rawUrl)) {
+    score += 5; flag('atSign', r.atSign); highConfidence = true;
   }
   if (url.protocol === 'http:') {
-    score += 1; reasons.push(r.insecureHttp);
+    score += 1; flag('insecureHttp', r.insecureHttp);
   }
   if (SHORTENERS.some((s) => hostname === s || hostname.slice(-(s.length + 1)) === ('.' + s))) {
-    score += 2; reasons.push(r.shortener);
+    score += 2; flag('shortener', r.shortener);
   }
   let hitTld = false;
   if (SUSPICIOUS_TLDS.some((t) => hostname.slice(-t.length) === t)) {
-    score += 2; reasons.push(r.suspiciousTld); hitTld = true;
+    score += 2; flag('suspiciousTld', r.suspiciousTld); hitTld = true;
   }
   if (hostname.indexOf('xn--') !== -1) {
-    score += 3; reasons.push(r.punycode);
+    score += 3; flag('punycode', r.punycode);
   }
   const subdomainParts = hostname.split('.').length - 2;
-  if (subdomainParts >= 3) {
-    score += 2; reasons.push(r.manySubdomains);
+  // An IP-like prefix's four "labels" are already counted as ipLikeDomain
+  // above; don't score the same dots twice as "many subdomains".
+  if (subdomainParts >= 3 && !signals.includes('ipLikeDomain')) {
+    score += 2; flag('manySubdomains', r.manySubdomains);
   }
   const isKnownSafe = KNOWN_SAFE_DOMAINS.some((d) => hostname === d || hostname.slice(-(d.length + 1)) === ('.' + d));
   let hitBrand = false;
@@ -985,14 +1319,20 @@ export function heuristicAnalysis(rawUrl, lang) {
   } else {
     const hit = BRAND_KEYWORDS.find((b) => hostname.indexOf(b) !== -1);
     if (hit) {
-      score += 3; reasons.push(r.brandImpersonation); hitBrand = true;
+      score += 3; flag('brandImpersonation', r.brandImpersonation); hitBrand = true;
     }
   }
   const kc = URGENT_WORDS.filter((w) => full.indexOf(w) !== -1).length;
   let hitUrgent = false;
   if (kc >= 2) {
-    score += 2; reasons.push(r.urgentWords); hitUrgent = true;
+    score += 2; flag('urgentWords', r.urgentWords); hitUrgent = true;
   }
+  // A brand keyword next to even ONE urgent word IN THE DOMAIN NAME
+  // ("leumi-verify.co.il") is the mimicry pattern rather than a
+  // coincidental surname/word match, so it gets its own signal key (no
+  // extra score) for the .il exemption. Hostname only: a real shop's
+  // "/login" or "/account" path is not mimicry.
+  if (hitBrand && URGENT_WORDS.some((w) => hostname.indexOf(w) !== -1)) signals.push('brandWithUrgency');
 
   // ---------- new signals (see helper functions above for the "why") ----------
   // Skipped entirely for a known-safe domain -- there is nothing left to
@@ -1005,32 +1345,32 @@ export function heuristicAnalysis(rawUrl, lang) {
     const typosquat = parsedPsl ? detectTyposquat(parsedPsl.sld) : null;
     if (typosquat) {
       score += typosquat.distance === 0 ? 5 : typosquat.distance === 1 ? 4 : 3;
-      reasons.push(r.typosquat(typosquat.brand));
+      flag('typosquat', r.typosquat(typosquat.brand));
       hitBrand = true;
     }
 
     const decoyBrand = detectBrandSubdomainDecoy(hostname, registrableDomain);
     if (decoyBrand) {
-      score += 5; reasons.push(r.subdomainDecoy(decoyBrand)); hitBrand = true;
+      score += 5; flag('subdomainDecoy', r.subdomainDecoy(decoyBrand)); hitBrand = true;
     }
   }
 
   if (detectHomoglyph(hostname, safePslParse(hostname))) {
-    score += 4; reasons.push(r.homoglyph);
+    score += 4; flag('homoglyph', r.homoglyph);
   }
 
   if (countUnnecessaryPercentEncoding(rawUrl) >= 3 || hasDoubleEncoding(rawUrl) || hasEncodedDelimiterInPath(url)) {
-    score += 2; reasons.push(r.suspiciousEncoding); hitEncoding = true;
+    score += 2; flag('suspiciousEncoding', r.suspiciousEncoding); hitEncoding = true;
   }
 
   if (urlComplexityHits(url, rawUrl) >= 2) {
     score += Math.min(2, urlComplexityHits(url, rawUrl));
-    reasons.push(r.urlComplexity); hitComplexity = true;
+    flag('urlComplexity', r.urlComplexity); hitComplexity = true;
   }
 
   const sldForEntropy = (safePslParse(hostname) || {}).sld || hostname.split('.')[0];
   if (looksRandomHostname(sldForEntropy)) {
-    score += 1; reasons.push(r.randomHostname); hitEntropy = true;
+    score += 1; flag('randomHostname', r.randomHostname); hitEntropy = true;
   }
 
   // ---------- signal-combination bonuses ----------
@@ -1055,7 +1395,7 @@ export function heuristicAnalysis(rawUrl, lang) {
   if (hitBrand && hitEncoding) comboBonus += 1;
   if (comboBonus > 0) {
     score += Math.min(3, comboBonus);
-    reasons.push(r.comboBonus);
+    flag('comboBonus', r.comboBonus);
   }
 
   const verdict = score >= 5 ? 'unsafe' : (score >= 2 ? 'uncertain' : 'safe');
@@ -1067,5 +1407,5 @@ export function heuristicAnalysis(rawUrl, lang) {
   // and its caller below. Existing callers that only use `verdict` /
   // `reasons` / `highConfidence` (including every existing test) are
   // completely unaffected by this addition.
-  return { verdict, reasons, highConfidence, score };
+  return { verdict, reasons, highConfidence, score, signals };
 }
