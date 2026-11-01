@@ -1,4 +1,7 @@
-import handler, { __setRatelimiterForTests, heuristicAnalysis } from './api/check-link.js';
+import handler, {
+  __setRatelimiterForTests, heuristicAnalysis,
+  __setHopRequestForTests, __setConnectLookupForTests, __setRedirectBudgetForTests, __guardedLookupForTests, __guardedHopForTests,
+} from './api/check-link.js';
 import statsHandler from './api/stats.js';
 import { __setRedisForTests } from './api/_lib/redis.js';
 import { infrastructureAnalysis, __setDnsForTests, __setRdapFetchForTests } from './api/_lib/infrastructure.js';
@@ -88,6 +91,13 @@ async function run() {
   // and restore this default afterwards.
   __setDnsForTests(makeFakeDns());
   __setRdapFetchForTests(makeFakeRdapFetch());
+  // Redirect hops normally go through node:http with the connect-time SSRF
+  // lookup (see guardedHop in check-link.js). Route them through whatever
+  // global.fetch mock the test installed instead, so every test below keeps
+  // controlling both the hops and Web Risk from one place, with no live
+  // network calls. Tests that exercise the real guarded path clear this.
+  const hopViaMockedFetch = (url, opts) => global.fetch(url, opts);
+  __setHopRequestForTests(hopViaMockedFetch);
 
   // --- 1. Web Risk says danger -> danger, no heuristic needed ---
   {
@@ -700,6 +710,561 @@ async function run() {
     check('race pattern: non-danger path waits for and reflects infra signal', res._json.status !== 'safe', res._json);
     check('race pattern: still not an automatic "danger" (no highConfidence from infra)', res._json.status !== 'danger', res._json);
     __setDnsForTests(makeFakeDns());
+  }
+
+  // ============================================================
+  // Round 1 backend hardening: userinfo-only "@", literal + connect-time
+  // SSRF guard, raw IPv6, redirect-chain budget, narrowed .il exemption.
+  // ============================================================
+
+  // --- 47. "@" only counts in the userinfo part. An "@" in the query or
+  // path (unsubscribe links, medium.com/@user) is ordinary and must never
+  // force "danger" past a clean Web Risk result. ---
+  {
+    for (const url of ['https://shop.example.com/unsubscribe?email=a@b.com', 'https://medium.com/@someone/a-post']) {
+      const h = heuristicAnalysis(url, 'he');
+      check(`@ outside userinfo: ${url} -> not highConfidence`, h.highConfidence === false, h);
+      check(`@ outside userinfo: ${url} -> no @-trick reason`, !h.reasons.some((r) => r.includes('סימן @')), h);
+    }
+    for (const url of ['http://paypal.com@evil.example.ru/', 'http://user:pass@evil.example.ru/', 'http://@evil.example.ru/']) {
+      const h = heuristicAnalysis(url, 'he');
+      check(`@ in userinfo: ${url} -> still highConfidence`, h.highConfidence === true, h);
+    }
+
+    global.fetch = noRedirectFetch(async () => ({ ok: true, json: async () => ({}) })); // Web Risk: nothing found
+    const res = mockRes();
+    await handler({ method: 'POST', body: { link: 'https://news.example.com/unsubscribe?email=a@b.com' } }, res);
+    check('@ in query + Web Risk clean -> not danger', res._json.status !== 'danger', res._json);
+  }
+
+  // --- 48. Literal SSRF guard covers every non-public range, including the
+  // spellings the old prefix regexes missed -- and refuses before ANY hop
+  // is attempted ---
+  {
+    const literalPrivate = [
+      'http://[::ffff:127.0.0.1]/', 'http://[fd00::1]/', 'http://[fe80::1]/', 'http://[::]/',
+      'http://0.1.2.3/', 'http://100.64.0.1/', 'http://localhost./', 'http://127.0.0.1./', 'http://0x7f.1/',
+    ];
+    for (const link of literalPrivate) {
+      let hopCalls = 0;
+      // Web Risk is still asked (an API call, not a connection to the URL);
+      // only an actual redirect hop to the private host must never happen.
+      global.fetch = async (url, opts) => { if (opts.redirect === 'manual') hopCalls++; throw new Error('must not be reached for a private literal'); };
+      const res = mockRes();
+      await handler({ method: 'POST', body: { link } }, res);
+      check(`literal SSRF: ${link} -> no hop attempted`, hopCalls === 0, hopCalls);
+      check(`literal SSRF: ${link} -> danger`, res._json.status === 'danger', res._json);
+      check(`literal SSRF: ${link} -> reason mentions internal network`, res._json.details.includes('פרטית'), res._json);
+    }
+  }
+
+  // --- 49. Raw IP literals: a public IPv6 literal is the same "raw IP
+  // instead of a domain" pattern as dotted IPv4; a public IPv4 still
+  // escalates through the normal (non-SSRF) path ---
+  {
+    const h = heuristicAnalysis('http://[2001:4860:4860::8888]/login', 'he');
+    check('raw public IPv6 -> highConfidence', h.highConfidence === true, h);
+    check('raw public IPv6 -> public-IP reason, not private', h.reasons.some((r) => r.includes('IP ציבורית')) && !h.reasons.some((r) => r.includes('פרטית')), h);
+
+    global.fetch = noRedirectFetch(async () => ({ ok: true, json: async () => ({}) }));
+    const res = mockRes();
+    await handler({ method: 'POST', body: { link: 'http://8.8.4.4/verify-account' } }, res);
+    check('raw public IPv4 (not TEST-NET) -> danger via heuristic path', res._json.status === 'danger' && !res._json.details.includes('פרטית'), res._json);
+  }
+
+  // --- 50. Connect-time SSRF guard: a public-looking hostname whose DNS
+  // answer (the one the connection itself would use) is private is refused
+  // before connecting -- but, like any DNS-derived private IP, that alone
+  // never forces "danger": it lands on "uncertain". Uses the real
+  // guarded hop with a fake lookup -- the lookup refuses, so no socket is
+  // ever opened. ---
+  {
+    __setHopRequestForTests(null);
+    for (const answer of [
+      [{ address: '169.254.169.254', family: 4 }],
+      [{ address: '93.184.216.34', family: 4 }, { address: '10.0.0.5', family: 4 }], // mixed answer
+    ]) {
+      const looked = [];
+      __setConnectLookupForTests(async (host) => { looked.push(host); return answer; });
+      global.fetch = async () => { throw new Error('Web Risk must not be reached after an SSRF refusal'); };
+      const res = mockRes();
+      await handler({ method: 'POST', body: { link: 'http://rebind.example.com/x' } }, res);
+      check(`connect-time SSRF (${answer.map((a) => a.address).join(',')}) -> lookup ran on the real hostname`, looked[0] === 'rebind.example.com', looked);
+      check(`connect-time SSRF (${answer.map((a) => a.address).join(',')}) -> uncertain, not danger`, res._json.status === 'uncertain', res._json);
+      check(`connect-time SSRF (${answer.map((a) => a.address).join(',')}) -> reason mentions internal network`, res._json.details.includes('פרטית'), res._json);
+    }
+
+    // The allow/deny decision itself, without opening a socket.
+    const lookupOnce = (answer, opts) => new Promise((resolve) => {
+      __setConnectLookupForTests(async () => answer);
+      __guardedLookupForTests('example.com', opts, (err, address, family) => resolve({ err, address, family }));
+    });
+    let out = await lookupOnce([{ address: '93.184.216.34', family: 4 }], {});
+    check('guardedLookup: public answer -> passed through', !out.err && out.address === '93.184.216.34' && out.family === 4, out);
+    out = await lookupOnce([{ address: '2606:2800:220:1::1', family: 6 }, { address: '93.184.216.34', family: 4 }], { all: true });
+    check('guardedLookup: { all: true } -> full public list', !out.err && Array.isArray(out.address) && out.address.length === 2, out);
+    out = await lookupOnce([{ address: '2606:2800:220:1::1', family: 6 }, { address: '93.184.216.34', family: 4 }], { family: 4 });
+    check('guardedLookup: family filter respected', !out.err && out.address === '93.184.216.34', out);
+    out = await lookupOnce([{ address: '::ffff:127.0.0.1', family: 6 }], {});
+    check('guardedLookup: IPv4-mapped loopback -> refused as SSRF', out.err && out.err.ssrf === true && out.err.refusedAtConnect === true, out.err);
+    out = await lookupOnce([], {});
+    check('guardedLookup: empty answer -> ENOTFOUND, not SSRF', out.err && out.err.code === 'ENOTFOUND' && !out.err.ssrf, out.err);
+
+    __setConnectLookupForTests(null);
+    __setHopRequestForTests(hopViaMockedFetch);
+  }
+
+  // --- 51. Redirect-chain budget: a chain that stalls mid-way stops at the
+  // budget and checks the last URL it reached, instead of running past
+  // vercel.json's maxDuration -- and since the destination was never
+  // seen, the answer is capped at "uncertain", never "safe" ---
+  {
+    __setRedirectBudgetForTests(300);
+    let webRiskUri = null;
+    global.fetch = async (url, opts) => {
+      if (opts.method === 'HEAD' && url.startsWith('https://start.example.com')) {
+        return { status: 302, headers: { get: (h) => (h === 'location' ? 'https://hop2.example.com/landing' : null) } };
+      }
+      if (opts.method === 'HEAD' || opts.method === 'GET' && opts.redirect === 'manual') return new Promise(() => {}); // stalls forever
+      webRiskUri = new URL(url).searchParams.get('uri');
+      return { ok: true, json: async () => ({}) };
+    };
+    const res = mockRes();
+    const t0 = Date.now();
+    await handler({ method: 'POST', body: { link: 'https://start.example.com/go' } }, res);
+    const elapsedMs = Date.now() - t0;
+    check('redirect budget: stalled chain returns within budget', elapsedMs < 1500, elapsedMs);
+    check('redirect budget: last reached URL is the one checked', webRiskUri === 'https://hop2.example.com/landing', webRiskUri);
+    check('redirect budget: incomplete chain -> 200 uncertain, never safe', res._status === 200 && res._json.status === 'uncertain', res._json);
+    check('redirect budget: reason says the chain was not followed to the end', res._json.details.includes('שרשרת ההפניות'), res._json);
+    __setRedirectBudgetForTests(null);
+  }
+
+  // --- 52. .il exemption covers generic noise only. Weak structural noise
+  // on a .il site is still "safe" after a clean Web Risk result, but brand
+  // mimicry, a typosquat, a homoglyph or a DNS-private destination keeps it
+  // at "uncertain" (never "danger" -- none of these force it) ---
+  {
+    global.fetch = noRedirectFetch(async () => ({ ok: true, json: async () => ({}) })); // Web Risk: nothing found
+    const verdictFor = async (link) => {
+      const res = mockRes();
+      await handler({ method: 'POST', body: { link } }, res);
+      return res._json;
+    };
+
+    let r = await verdictFor('http://a.b.c.small-shop.co.il/'); // plain http + many subdomains: generic noise
+    check('.il weak noise only -> still safe', r.status === 'safe', r);
+    r = await verdictFor('https://www.leumi.co.il');
+    check('.il known-safe domain -> safe', r.status === 'safe', r);
+
+    for (const link of ['https://leumi-secure.co.il/login', 'https://lewmi.co.il', 'https://lеumi.co.il']) { // brand keyword, typosquat, Cyrillic е
+      r = await verdictFor(link);
+      check(`.il strong signal: ${link} -> uncertain, not safe`, r.status === 'uncertain', r);
+    }
+
+    __setDnsForTests(makeFakeDns({ a: ['10.0.0.5'] }));
+    r = await verdictFor('https://intranet-portal.co.il');
+    check('.il with DNS-private destination -> uncertain (not safe, not danger)', r.status === 'uncertain', r);
+    __setDnsForTests(makeFakeDns());
+  }
+
+  // ============================================================
+  // Round 1 QA matrix (קאי's case list + אבי's review requests).
+  // Web Risk mocked "safe" unless stated; DNS/RDAP faked; no network.
+  // ============================================================
+
+  const webRiskSafe = noRedirectFetch(async () => ({ ok: true, json: async () => ({}) }));
+  const runLink = async (link) => {
+    const res = mockRes();
+    await handler({ method: 'POST', body: { link } }, res);
+    return res._json;
+  };
+
+  // --- 53. Literal private/internal hosts: no hop to them, danger, and
+  // highConfidence in the heuristic itself ---
+  {
+    const cases = [
+      'http://localhost./admin', 'http://foo.localhost/', 'http://[::ffff:127.0.0.1]/', 'http://[::ffff:a9fe:a9fe]/',
+      'http://[fd00::1]/', 'http://[fe80::1]/', 'http://[::]/', 'http://[0:0:0:0:0:0:0:1]/', 'http://0.1.2.3/',
+      'http://100.100.100.200/', 'http://0x7f.1/', 'http://2130706433/', 'http://127.1/', 'http://[64:ff9b::7f00:1]/',
+      'http://[2001:db8::1]/', 'http://[::ffff:203.0.113.5]/', 'http://user@192.0.2.1/',
+    ];
+    for (const link of cases) {
+      let hopCalls = 0;
+      global.fetch = async (url, opts) => { if (opts.redirect === 'manual') hopCalls++; throw new Error('must not be reached'); };
+      const r = await runLink(link);
+      check(`QA SSRF literal ${link} -> no hop`, hopCalls === 0, hopCalls);
+      check(`QA SSRF literal ${link} -> danger with SSRF prefix`, r.status === 'danger' && r.details.startsWith('הקישור מפנה לכתובת רשת פרטית'), r);
+      check(`QA SSRF literal ${link} -> heuristic highConfidence`, heuristicAnalysis(link, 'he').highConfidence === true);
+    }
+  }
+
+  // --- 54. Public -> private redirect on a later hop: the private hop is
+  // never requested, verdict is danger ---
+  {
+    for (const target of ['http://[::ffff:7f00:1]/latest/', 'http://100.100.100.200/', 'http://169.254.169.254/latest/meta-data/']) {
+      const requested = [];
+      global.fetch = async (url, opts) => {
+        if (opts.redirect === 'manual') requested.push(url);
+        if (url.startsWith('https://public-hop.example.com')) {
+          return { status: 302, headers: { get: (h) => (h === 'location' ? target : null) } };
+        }
+        throw new Error('must not be reached');
+      };
+      const r = await runLink('https://public-hop.example.com/go');
+      check(`QA redirect public->${target} -> danger`, r.status === 'danger', r);
+      check(`QA redirect public->${target} -> private hop never requested`, requested.length === 1, requested);
+    }
+  }
+
+  // --- 55. Things that are NOT private/raw IPs: domains that merely start
+  // with digits or contain "localhost" are fetched normally and get no
+  // private/IP verdict ---
+  {
+    for (const link of ['https://10.example.co.il/', 'https://127news.com/', 'https://localhost-tools.com/', 'https://ipv6.google.com/']) {
+      let hopCalls = 0;
+      const base = webRiskSafe;
+      global.fetch = async (url, opts) => { if (opts.method === 'HEAD') hopCalls++; return base(url, opts); };
+      const h = heuristicAnalysis(link, 'he');
+      check(`QA not-an-IP ${link} -> no privateHost/publicIp signal`, !h.signals.includes('privateHost') && !h.signals.includes('publicIp'), h);
+      check(`QA not-an-IP ${link} -> not highConfidence`, h.highConfidence === false, h);
+      const r = await runLink(link);
+      check(`QA not-an-IP ${link} -> hop was made`, hopCalls === 1, hopCalls);
+      check(`QA not-an-IP ${link} -> not danger`, r.status !== 'danger', r);
+    }
+  }
+
+  // --- 56. Domains built to look like an IP: suspicious score (uncertain),
+  // never highConfidence/danger ---
+  {
+    global.fetch = webRiskSafe;
+    for (const link of ['http://192.168.1.1.evil.com/', 'http://127.0.0.1.nip.io/']) {
+      const h = heuristicAnalysis(link, 'he');
+      check(`QA IP-like domain ${link} -> flagged, not safe`, h.signals.includes('ipLikeDomain') && h.verdict !== 'safe', h);
+      check(`QA IP-like domain ${link} -> not highConfidence`, h.highConfidence === false, h);
+      const r = await runLink(link);
+      check(`QA IP-like domain ${link} -> handler uncertain`, r.status === 'uncertain', r);
+    }
+    // ...and when its DNS really points at loopback (nip.io), the
+    // connect-time guard refuses it -- still uncertain, not danger.
+    __setHopRequestForTests(null);
+    __setConnectLookupForTests(async () => [{ address: '127.0.0.1', family: 4 }]);
+    const r = await runLink('http://127.0.0.1.nip.io/');
+    check('QA 127.0.0.1.nip.io resolving to loopback -> refused, uncertain', r.status === 'uncertain' && r.details.startsWith('הקישור מפנה לכתובת רשת פרטית'), r);
+    __setConnectLookupForTests(async () => [{ address: '10.0.0.5', family: 4 }, { address: 'fd00::1', family: 6 }]);
+    const r2 = await runLink('https://public-name.example.com/');
+    check('QA public name with A=10.0.0.5/AAAA=fd00::1 -> not safe, not danger', r2.status === 'uncertain', r2);
+    __setConnectLookupForTests(null);
+    __setHopRequestForTests(hopViaMockedFetch);
+  }
+
+  // --- 57. Raw IPs in any spelling -> danger + highConfidence ---
+  {
+    global.fetch = webRiskSafe;
+    for (const link of ['http://203.0.113.5/', 'http://0xcb.0x0.0x71.0x5/', 'http://3405803781/', 'http://[2606:4700:4700::1111]/', 'http://[2001:db8::1]/', 'http://[::ffff:203.0.113.5]/']) {
+      check(`QA raw IP ${link} -> highConfidence`, heuristicAnalysis(link, 'he').highConfidence === true);
+      const r = await runLink(link);
+      check(`QA raw IP ${link} -> danger`, r.status === 'danger', r);
+    }
+    const h = heuristicAnalysis('http://[2606:4700:4700::1111]/', 'he');
+    check('QA public IPv6 -> publicIp, not privateHost', h.signals.includes('publicIp') && !h.signals.includes('privateHost'), h);
+  }
+
+  // --- 58. "@" only in userinfo -- including on an earlier redirect hop ---
+  {
+    global.fetch = webRiskSafe;
+    for (const link of ['http://google.com@evil.com/', 'http://paypal.com:pw@evil.ru/', 'http://leumi.co.il@evil.co.il/']) {
+      check(`QA userinfo ${link} -> highConfidence`, heuristicAnalysis(link, 'he').highConfidence === true);
+      const r = await runLink(link);
+      check(`QA userinfo ${link} -> danger`, r.status === 'danger', r);
+    }
+    for (const link of ['https://shop.example.com/unsubscribe?email=a@b.com', 'https://medium.com/@username/post-123', 'https://example.com/#contact@me']) {
+      const h = heuristicAnalysis(link, 'he');
+      check(`QA @ outside userinfo ${link} -> no atSign, not highConfidence`, !h.signals.includes('atSign') && h.highConfidence === false, h);
+    }
+    let r = await runLink('https://www.google.com/?email=a@b.com');
+    check('QA google.com/?email=a@b.com -> safe', r.status === 'safe', r);
+    r = await runLink('https://medium.com/@user');
+    check('QA medium.com/@user -> not danger', r.status !== 'danger', r);
+
+    // userinfo that would redirect to a clean site: never connected to, so
+    // the redirect can't launder it -- still danger
+    let hops = 0;
+    global.fetch = async (url, opts) => {
+      if (opts.method === 'HEAD') {
+        hops++;
+        return { status: 302, headers: { get: (h) => (h === 'location' ? 'https://clean-landing.example.com/' : null) } };
+      }
+      return webRiskSafe(url, opts);
+    };
+    r = await runLink('https://google.com@evil.example.com/x');
+    check('QA userinfo + 302 to a clean site -> danger', r.status === 'danger' && r.details.includes('סימן @'), r);
+    check('QA userinfo URL is never connected to', hops === 0, hops);
+
+    // a raw public IP earlier in the chain, redirecting to a clean domain
+    global.fetch = async (url, opts) => {
+      if (opts.method === 'HEAD' && url.startsWith('http://8.8.4.4')) {
+        return { status: 302, headers: { get: (h) => (h === 'location' ? 'https://clean-landing.example.com/' : null) } };
+      }
+      return webRiskSafe(url, opts);
+    };
+    r = await runLink('http://8.8.4.4/go');
+    check('QA raw IP hop -> 302 to a clean domain -> still danger', r.status === 'danger' && r.details.includes('IP ציבורית'), r);
+  }
+
+  // --- 59. .il exemption by signal TYPE ---
+  {
+    global.fetch = webRiskSafe;
+    for (const link of [
+      'https://www.leumi.co.il/', 'https://login.bankhapoalim.co.il/', 'https://digital.isracard.co.il/', 'https://gov.il',
+      'https://www.ynet.co.il/news/article/%D7%97%D7%93%D7%A9%D7%95%D7%AA-%D7%94%D7%99%D7%95%D7%9D',
+      'http://www.mizrahi-catering.co.il/', 'https://superdiscount.co.il/', 'https://maccabi-tor.co.il/', 'https://10.example.co.il/',
+    ]) {
+      const r = await runLink(link);
+      check(`QA .il legit ${link} -> safe`, r.status === 'safe', r);
+    }
+    const ynet = heuristicAnalysis('https://www.ynet.co.il/news/article/%D7%97%D7%93%D7%A9%D7%95%D7%AA-%D7%94%D7%99%D7%95%D7%9D', 'he');
+    check('QA ynet Hebrew path -> no encoding / complexity signal', !ynet.signals.includes('suspiciousEncoding') && !ynet.signals.includes('urlComplexity'), ynet);
+    for (const link of ['https://paypa1.co.il/', 'https://paypal.com.evil.co.il/', 'https://leumi-verify-account.co.il/login', 'https://leumi-verify.co.il/']) {
+      const r = await runLink(link);
+      check(`QA .il mimicry ${link} -> uncertain`, r.status === 'uncertain', r);
+    }
+    // A young .il domain (if RDAP ever covers .il) also loses the exemption.
+    __setRdapFetchForTests(async () => ({ ok: true, json: async () => ({ events: [{ eventAction: 'registration', eventDate: new Date(Date.now() - 2 * 86400000).toISOString() }] }) }));
+    const r = await runLink('http://www.brand-new-shop.co.il/');
+    check('QA .il young domain -> uncertain', r.status === 'uncertain', r);
+    __setRdapFetchForTests(makeFakeRdapFetch());
+  }
+
+  // --- 60. Redirect chain shape: >5 hops stops at exactly 5 requests and
+  // caps at uncertain; a slow chain respects the budget; a shortener is
+  // judged by its destination; a non-http Location ends the chain ---
+  {
+    let n = 0;
+    global.fetch = async (url, opts) => {
+      if (opts.method === 'HEAD') { n++; return { status: 302, headers: { get: (h) => (h === 'location' ? `https://loop${n}.example.com/` : null) } }; }
+      return webRiskSafe(url, opts);
+    };
+    let r = await runLink('https://loop0.example.com/');
+    check('QA >5 redirects -> exactly 5 hops', n === 5, n);
+    check('QA >5 redirects -> uncertain (never safe), not unknown', r.status === 'uncertain', r);
+
+    __setRedirectBudgetForTests(200);
+    let k = 0;
+    global.fetch = async (url, opts) => {
+      if (opts.method === 'HEAD') {
+        k++;
+        await new Promise((res) => setTimeout(res, 100));
+        return { status: 302, headers: { get: (h) => (h === 'location' ? `https://slow${k}.example.com/` : null) } };
+      }
+      return webRiskSafe(url, opts);
+    };
+    const t0 = Date.now();
+    r = await runLink('https://slow0.example.com/');
+    check('QA slow chain -> returns within budget + margin', Date.now() - t0 < 1000, Date.now() - t0);
+    check('QA slow chain -> uncertain, not unknown', r.status === 'uncertain', r);
+    __setRedirectBudgetForTests(null);
+
+    global.fetch = async (url, opts) => {
+      if (opts.method === 'HEAD' && url.startsWith('https://bit.ly/')) {
+        return { status: 301, headers: { get: (h) => (h === 'location' ? 'http://paypa1-login.top/verify' : null) } };
+      }
+      return webRiskSafe(url, opts);
+    };
+    r = await runLink('https://bit.ly/abc');
+    check('QA shortener -> judged at its destination (uncertain)', r.status === 'uncertain' && !r.details.includes('מקוצר'), r);
+
+    const requested = [];
+    global.fetch = async (url, opts) => {
+      if (opts.method === 'HEAD') {
+        requested.push(url);
+        return { status: 302, headers: { get: (h) => (h === 'location' ? 'ftp://files.example.com/x' : null) } };
+      }
+      return webRiskSafe(url, opts);
+    };
+    r = await runLink('https://to-ftp.example.com/');
+    check('QA non-http Location -> chain ends, ftp never requested', requested.length === 1, requested);
+  }
+
+  // --- 61. Web Risk "danger" stays danger whatever else is going on ---
+  {
+    const webRiskDanger = (url, opts) => ({ ok: true, json: async () => ({ threat: { threatTypes: ['SOCIAL_ENGINEERING'] } }) });
+    for (const link of ['https://www.leumi.co.il/', 'https://medium.com/@user', 'https://10.example.co.il/']) {
+      global.fetch = noRedirectFetch(webRiskDanger);
+      const r = await runLink(link);
+      check(`QA Web Risk danger wins: ${link}`, r.status === 'danger', r);
+    }
+    __setRedirectBudgetForTests(200);
+    global.fetch = async (url, opts) => (opts.method === 'HEAD' ? new Promise(() => {}) : webRiskDanger(url, opts));
+    const r = await runLink('https://stalls.example.com/');
+    check('QA Web Risk danger wins even on an incomplete chain', r.status === 'danger', r);
+    __setRedirectBudgetForTests(null);
+  }
+
+  // --- 62. QA review round 2: urgency only counts in the domain name, a
+  // first-hop timeout isn't an "incomplete chain", randomHostname is weak ---
+  {
+    global.fetch = webRiskSafe;
+    for (const link of ['https://www.superdiscount.co.il/account/orders', 'https://www.mizrahi-catering.co.il/login', 'http://www.shop4you2day.co.il/']) {
+      const r = await runLink(link);
+      check(`QA2 .il legit ${link} -> safe`, r.status === 'safe', r);
+    }
+    for (const link of ['https://leumi-verify.co.il/', 'https://secure-leumi.co.il/']) {
+      const r = await runLink(link);
+      check(`QA2 .il brand+urgent in hostname ${link} -> uncertain`, r.status === 'uncertain', r);
+    }
+
+    __setRedirectBudgetForTests(200);
+    global.fetch = async (url, opts) => (opts.method === 'HEAD' ? new Promise(() => {}) : webRiskSafe(url, opts));
+    let r = await runLink('https://www.leumi.co.il/');
+    check('QA2 first hop stalls (geo-blocked bank) -> link itself checked, safe', r.status === 'safe', r);
+    global.fetch = async (url, opts) => {
+      if (opts.method === 'HEAD' && url.startsWith('https://bit.ly/')) {
+        return { status: 302, headers: { get: (h) => (h === 'location' ? 'https://hop2.example.com/' : null) } };
+      }
+      return opts.method === 'HEAD' ? new Promise(() => {}) : webRiskSafe(url, opts);
+    };
+    r = await runLink('https://bit.ly/x');
+    check('QA2 shortener -> 302 -> stalled hop -> uncertain', r.status === 'uncertain', r);
+    __setRedirectBudgetForTests(null);
+
+    // HEAD rejected with 405 -> the same hop is retried as GET
+    const methods = [];
+    global.fetch = async (url, opts) => {
+      if (opts.redirect === 'manual') {
+        methods.push(opts.method);
+        if (opts.method === 'HEAD') return { status: 405, headers: { get: () => null } };
+        return { status: 200, headers: { get: () => null } };
+      }
+      return webRiskSafe(url, opts);
+    };
+    r = await runLink('https://no-head.example.com/');
+    check('QA2 HEAD 405 -> retried as GET on the same hop', methods.join(',') === 'HEAD,GET' && r.status === 'safe', { methods, r });
+  }
+
+  // --- 63. The real guardedHop (node:http request, header reading, absolute
+  // timer) against a local server on 127.0.0.1 -- loopback only, no
+  // external network. The guard itself would refuse 127.0.0.1, so these
+  // pass a plain lookup; the guard's own refusal is covered in 50/56. ---
+  {
+    const http = await import('node:http');
+    const plainLookup = (host, opts, cb) => {
+      if (typeof opts === 'function') { cb = opts; opts = {}; }
+      return opts && opts.all ? cb(null, [{ address: '127.0.0.1', family: 4 }]) : cb(null, '127.0.0.1', 4);
+    };
+    let bodyReads = 0;
+    const server = http.createServer((req, res) => {
+      if (req.url === '/redirect') { res.writeHead(302, { Location: '/next' }); return res.end(); }
+      if (req.url === '/no-head' && req.method === 'HEAD') { res.writeHead(405); return res.end(); }
+      if (req.url === '/no-head') { res.writeHead(200); res.write('x'.repeat(65536)); bodyReads++; return; } // never ends
+      if (req.url === '/hang') return; // never answers
+      res.writeHead(200); res.end();
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const base = `http://local-test.example:${server.address().port}`;
+
+    let resp = await __guardedHopForTests(base + '/redirect', 'HEAD', 2000, plainLookup);
+    check('guardedHop: reads status + Location', resp.status === 302 && resp.headers.get('Location') === '/next', resp.status);
+    resp = await __guardedHopForTests(base + '/no-head', 'HEAD', 2000, plainLookup);
+    check('guardedHop: HEAD 405 surfaced', resp.status === 405, resp.status);
+    resp = await __guardedHopForTests(base + '/no-head', 'GET', 2000, plainLookup);
+    check('guardedHop: GET returns on headers without waiting for an endless body', resp.status === 200 && bodyReads === 1, resp.status);
+
+    const t0 = Date.now();
+    let err = null;
+    try { await __guardedHopForTests(base + '/hang', 'HEAD', 200, plainLookup); } catch (e) { err = e; }
+    check('guardedHop: absolute timer fires on a silent server', err && err.code === 'EHOPTIMEOUT' && Date.now() - t0 < 1000, err && err.code);
+
+    // And with the REAL guard wired in, the same local server is refused
+    // before any connection (proves lookup is plumbed into the request).
+    let hits = 0;
+    server.on('request', () => { hits++; });
+    __setConnectLookupForTests(async () => [{ address: '127.0.0.1', family: 4 }]);
+    err = null;
+    try { await __guardedHopForTests(base + '/redirect', 'HEAD', 2000); } catch (e) { err = e; }
+    check('guardedHop + guardedLookup: loopback refused with ESSRFBLOCKED', err && err.code === 'ESSRFBLOCKED', err && err.code);
+    check('guardedHop + guardedLookup: server never received the request', hits === 0, hits);
+    __setConnectLookupForTests(null);
+
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
+
+  // --- 64. Web Risk sees the whole chain (security review A/B/C) ---
+  {
+    const webRiskUris = [];
+    const webRiskListing = (listed) => async (url, opts) => {
+      if (opts.redirect === 'manual') return null; // handled by the caller
+      const uri = new URL(url).searchParams.get('uri');
+      webRiskUris.push(uri);
+      return { ok: true, json: async () => (listed.some((l) => uri.startsWith(l)) ? { threat: { threatTypes: ['SOCIAL_ENGINEERING'] } } : {}) };
+    };
+    const redirecting = (from, to, webRisk) => async (url, opts) => {
+      if (opts.redirect === 'manual') {
+        if (url.startsWith(from)) return { status: 302, headers: { get: (h) => (h === 'location' ? to : null) } };
+        return { status: 200, headers: { get: () => null } };
+      }
+      return webRisk(url, opts);
+    };
+
+    // B: a listed URL that cloaks by redirecting us to google.com
+    webRiskUris.length = 0;
+    global.fetch = redirecting('https://listed-phish.example.com', 'https://www.google.com/', webRiskListing(['https://listed-phish.example.com']));
+    let r = await runLink('https://listed-phish.example.com/login');
+    check('WR chain: listed URL cloaking to google.com -> danger', r.status === 'danger', r);
+    check('WR chain: both URLs were asked', webRiskUris.length === 2, webRiskUris);
+
+    // B: a clean URL redirecting to a listed destination (as before)
+    global.fetch = redirecting('https://clean-start.example.com', 'https://listed-dest.example.com/x', webRiskListing(['https://listed-dest.example.com']));
+    r = await runLink('https://clean-start.example.com/');
+    check('WR chain: clean start -> listed destination -> danger', r.status === 'danger', r);
+
+    // B: no redirect -> exactly one Web Risk call
+    webRiskUris.length = 0;
+    global.fetch = redirecting('https://never-matches.invalid', '', webRiskListing([]));
+    r = await runLink('https://www.google.com/');
+    check('WR chain: no redirect -> exactly one Web Risk call', webRiskUris.length === 1 && r.status === 'safe', { webRiskUris, r });
+
+    // B: the extra call fails, the final one is clean -> cautious
+    // heuristic-only answer, same as a single failed call today
+    global.fetch = redirecting('https://flaky-start.example.com', 'https://www.google.com/', async (url) => {
+      if (new URL(url).searchParams.get('uri').startsWith('https://flaky-start')) throw new Error('simulated Web Risk failure');
+      return { ok: true, json: async () => ({}) };
+    });
+    r = await runLink('https://flaky-start.example.com/');
+    check('WR chain: one call failed -> treated as Web Risk unavailable', r.details.includes('בדיקה בסיסית'), r);
+
+    // A: refused at connect (DNS points private) but the URL is listed -> danger
+    __setHopRequestForTests(null);
+    __setConnectLookupForTests(async () => [{ address: '127.0.0.1', family: 4 }]);
+    global.fetch = webRiskListing(['http://listed-rebind.example.com']);
+    r = await runLink('http://listed-rebind.example.com/');
+    check('WR on SSRF path: DNS-private refusal + listed URL -> danger', r.status === 'danger' && r.details.includes('Google Web Risk'), r);
+    global.fetch = webRiskListing([]);
+    r = await runLink('http://unlisted-rebind.example.com/');
+    check('WR on SSRF path: DNS-private refusal + not listed -> still uncertain', r.status === 'uncertain', r);
+    global.fetch = async () => { throw new Error('simulated Web Risk outage'); };
+    r = await runLink('http://outage-rebind.example.com/');
+    check('WR on SSRF path: Web Risk down -> answer unchanged (uncertain)', r.status === 'uncertain' && r.details.startsWith('הקישור מפנה לכתובת רשת פרטית'), r);
+    __setConnectLookupForTests(null);
+    __setHopRequestForTests(hopViaMockedFetch);
+
+    // A literal private host is already "danger": Web Risk isn't spent on it
+    webRiskUris.length = 0;
+    global.fetch = webRiskListing([]);
+    r = await runLink('http://169.254.169.254/latest/meta-data/');
+    check('WR on SSRF path: literal private -> danger without a Web Risk call', r.status === 'danger' && webRiskUris.length === 0, { r, webRiskUris });
+
+    // C: raw public IP hop -> redirect to a host refused at connect -> danger
+    global.fetch = async (url, opts) => {
+      if (opts.redirect === 'manual') {
+        if (url.startsWith('http://8.8.4.4')) return { status: 302, headers: { get: (h) => (h === 'location' ? 'http://rebind-after-ip.example.com/' : null) } };
+        throw Object.assign(new Error('simulated connect-time refusal'), { ssrf: true, refusedAtConnect: true });
+      }
+      return { ok: true, json: async () => ({}) };
+    };
+    r = await runLink('http://8.8.4.4/go');
+    check('SSRF path keeps an earlier raw-IP hop -> danger', r.status === 'danger' && r.details.includes('IP ציבורית'), r);
   }
 
   console.log('\n' + pass + ' passed, ' + fail + ' failed');
