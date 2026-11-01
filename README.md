@@ -57,9 +57,9 @@ project is interesting* below for why.)
   (IPv4 and IPv6), under a 10-second budget for the whole chain
 - Per-IP rate limiting, shared-secret request auth, and privacy-
   conscious usage stats, all backed by Upstash Redis
-- 361 automated tests across two suites (346 for backend detection
-  logic + API behavior, 15 for URL extraction), zero live network
-  calls required to run either
+- 1386 automated tests across three suites (346 for backend detection
+  logic + API behavior, 15 for URL extraction, 1025 for translations),
+  zero live network calls required to run any of them
 
 ## Why this project is interesting (the engineering decisions)
 

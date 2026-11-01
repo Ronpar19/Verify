@@ -77,6 +77,7 @@ Desktop\link-checker-vercel\              <- הבקאנד + שורש
     ├── icons.js, statusIcons.js           <- אייקוני SVG (react-native-svg)
     ├── translations.js                    <- כל טקסטי הממשק, 5 שפות (המקור האמיתי)
     ├── extractUrls.js, test-extract-urls.mjs  <- מזהה קישורים בטקסט, 15 טסטים
+    ├── test-translations.mjs             <- בדיקות תרגומים, 1025 טסטים
     ├── app.json, eas.json, index.js, package.json
     ├── .env                                <- EXPO_PUBLIC_API_URL, EXPO_PUBLIC_APP_SECRET
     ├── assets\                             <- אייקוני האפליקציה הנייטיבית
@@ -236,6 +237,7 @@ Desktop\link-checker-vercel\              <- הבקאנד + שורש
   SSRF guard בזמן חיבור בכל hop, תקציב הזמן של שרשרת ההפניות,
   ו-race pattern (מוודא ש-"danger" חוזר מהר בלי להמתין ל-infra תקוע).
 - **extractUrls**: 15/15 (`node test-extract-urls.mjs` מתוך `mobile\`).
+- **תרגומים**: 1025/1025 (`node test-translations.mjs` מתוך `mobile\`).
 - **גרסת SDK**: Expo 54. תלויות עיקריות ב-mobile:
   `react-native-svg`, `expo-linear-gradient`, `expo-share-intent`,
   `@react-native-async-storage/async-storage`, `expo-updates`.
