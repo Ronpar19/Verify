@@ -491,7 +491,10 @@ export default async function handler(req, res) {
     chain = await resolveFinalUrl(normalized);
     finalUrl = chain.url;
   } catch (err) {
-    console.error('check-link error (resolve):', err);
+    // Log only what kind of failure it was: the error carries the link
+    // itself (attemptedUrl, visited, rawIpUrl), and link content never
+    // goes into the logs.
+    console.error('check-link error (resolve):', (err && err.code) || 'no code', err && err.ssrf ? '(ssrf)' : '');
     if (err && err.ssrf) {
       // We won't fetch a private/internal address (SSRF guard), but a link
       // pointing at one is itself a strong, useful signal — surface it
@@ -784,7 +787,7 @@ function guardedLookup(hostname, options, callback) {
       let addrs = Array.isArray(all) ? all : [];
       if (options && (options.family === 4 || options.family === 6)) addrs = addrs.filter((a) => a.family === options.family);
       if (!addrs.length) {
-        const notFound = new Error('No addresses for ' + hostname);
+        const notFound = new Error('No addresses for host');
         notFound.code = 'ENOTFOUND';
         return callback(notFound);
       }
@@ -792,7 +795,7 @@ function guardedLookup(hostname, options, callback) {
       // the socket may pick either, and a mixed answer is itself a
       // rebinding tell.
       if (addrs.some((a) => isNonPublicIp(a.address))) {
-        const blocked = new Error('Refusing to connect: ' + hostname + ' resolves to a private/internal address');
+        const blocked = new Error('Refusing to connect: host resolves to a private/internal address');
         blocked.code = 'ESSRFBLOCKED';
         blocked.ssrf = true;
         blocked.refusedAtConnect = true;
@@ -966,6 +969,18 @@ async function resolveFinalUrl(startUrl) {
   return { url: current, complete, rawIpUrl, visited };
 }
 
+function stripUserinfo(urlString) {
+  try {
+    const u = new URL(urlString);
+    if (!u.username && !u.password) return urlString;
+    u.username = '';
+    u.password = '';
+    return u.toString();
+  } catch (e) {
+    return urlString;
+  }
+}
+
 function hasUserinfo(urlString) {
   try {
     const u = new URL(urlString);
@@ -988,7 +1003,9 @@ async function checkWebRiskChain(urls, lang) {
     console.error('GOOGLE_API_KEY is not set in the environment');
     return null;
   }
-  const unique = [...new Set(urls)];
+  // Credentials in a URL ("user:pass@host") are the sender's, not part of
+  // what's being looked up -- never forward them to Google.
+  const unique = [...new Set(urls.map(stripUserinfo))];
   const results = await Promise.all(unique.map((u) => checkWebRisk(u, apiKey, lang).catch((err) => {
     console.error('check-link error (webrisk):', err);
     return null;
