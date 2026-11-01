@@ -64,7 +64,7 @@ Desktop\link-checker-vercel\              <- הבקאנד + שורש
 │       ├── redis.js                      <- לקוח Upstash Redis משותף
 │       ├── stats.js                      <- ספירת שימוש פרטית (בלי לשמור תוכן קישורים)
 │       └── infrastructure.js             <- שכבת DNS/RDAP (נוספה בשיחה אחרונה)
-├── test.mjs                               <- 346 טסטים לבקאנד (heuristic + infra + SSRF + API)
+├── test.mjs                               <- 349 טסטים לבקאנד (heuristic + infra + SSRF + API)
 ├── package.json, README.md, vercel.json
 ├── DEPLOYMENT.md                          <- מדריך פריסה מלא צעד-אחר-צעד
 ├── .env.example, .gitignore
@@ -77,6 +77,7 @@ Desktop\link-checker-vercel\              <- הבקאנד + שורש
     ├── icons.js, statusIcons.js           <- אייקוני SVG (react-native-svg)
     ├── translations.js                    <- כל טקסטי הממשק, 5 שפות (המקור האמיתי)
     ├── extractUrls.js, test-extract-urls.mjs  <- מזהה קישורים בטקסט, 15 טסטים
+    ├── test-translations.mjs             <- בדיקות תרגומים, 1025 טסטים
     ├── app.json, eas.json, index.js, package.json
     ├── .env                                <- EXPO_PUBLIC_API_URL, EXPO_PUBLIC_APP_SECRET
     ├── assets\                             <- אייקוני האפליקציה הנייטיבית
@@ -231,11 +232,12 @@ Desktop\link-checker-vercel\              <- הבקאנד + שורש
 ---
 
 ## סטטוס טסטים
-- **בקאנד**: 346/346 (`node test.mjs` מהשורש) — כולל heuristic v2,
+- **בקאנד**: 349/349 (`node test.mjs` מהשורש) — כולל heuristic v2,
   שכבת ה-infra (עם DNS/RDAP מדומים, בלי קריאות רשת אמיתיות בטסטים),
   SSRF guard בזמן חיבור בכל hop, תקציב הזמן של שרשרת ההפניות,
   ו-race pattern (מוודא ש-"danger" חוזר מהר בלי להמתין ל-infra תקוע).
 - **extractUrls**: 15/15 (`node test-extract-urls.mjs` מתוך `mobile\`).
+- **תרגומים**: 1025/1025 (`node test-translations.mjs` מתוך `mobile\`).
 - **גרסת SDK**: Expo 54. תלויות עיקריות ב-mobile:
   `react-native-svg`, `expo-linear-gradient`, `expo-share-intent`,
   `@react-native-async-storage/async-storage`, `expo-updates`.
