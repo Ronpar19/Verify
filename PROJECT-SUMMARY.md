@@ -64,7 +64,7 @@ Desktop\link-checker-vercel\              <- הבקאנד + שורש
 │       ├── redis.js                      <- לקוח Upstash Redis משותף
 │       ├── stats.js                      <- ספירת שימוש פרטית (בלי לשמור תוכן קישורים)
 │       └── infrastructure.js             <- שכבת DNS/RDAP (נוספה בשיחה אחרונה)
-├── test.mjs                               <- 346 טסטים לבקאנד (heuristic + infra + SSRF + API)
+├── test.mjs                               <- 349 טסטים לבקאנד (heuristic + infra + SSRF + API)
 ├── package.json, README.md, vercel.json
 ├── DEPLOYMENT.md                          <- מדריך פריסה מלא צעד-אחר-צעד
 ├── .env.example, .gitignore
@@ -232,7 +232,7 @@ Desktop\link-checker-vercel\              <- הבקאנד + שורש
 ---
 
 ## סטטוס טסטים
-- **בקאנד**: 346/346 (`node test.mjs` מהשורש) — כולל heuristic v2,
+- **בקאנד**: 349/349 (`node test.mjs` מהשורש) — כולל heuristic v2,
   שכבת ה-infra (עם DNS/RDAP מדומים, בלי קריאות רשת אמיתיות בטסטים),
   SSRF guard בזמן חיבור בכל hop, תקציב הזמן של שרשרת ההפניות,
   ו-race pattern (מוודא ש-"danger" חוזר מהר בלי להמתין ל-infra תקוע).
