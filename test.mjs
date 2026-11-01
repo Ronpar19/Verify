@@ -1249,6 +1249,40 @@ async function run() {
     __setConnectLookupForTests(null);
     __setHopRequestForTests(hopViaMockedFetch);
 
+    // Userinfo is stripped before a URL goes to Google
+    webRiskUris.length = 0;
+    global.fetch = webRiskListing([]);
+    r = await runLink('https://someone:secret@creds.example.com/x');
+    check('WR: userinfo never sent to Google', webRiskUris.length === 1 && webRiskUris[0] === 'https://creds.example.com/x', webRiskUris);
+
+    // A shortener that times out on its very first hop is judged as the
+    // shortener itself -- still not "safe"
+    __setRedirectBudgetForTests(200);
+    global.fetch = async (url, opts) => (opts.redirect === 'manual' ? new Promise(() => {}) : { ok: true, json: async () => ({}) });
+    r = await runLink('https://bit.ly/stalls');
+    check('first-hop timeout on a shortener -> uncertain, not safe', r.status === 'uncertain', r);
+    __setRedirectBudgetForTests(null);
+
+    // Link content never reaches the logs on the SSRF path (literal and
+    // connect-time refusals carry the URL on the error object)
+    {
+      const logged = [];
+      const origError = console.error;
+      console.error = (...args) => logged.push(args.map(String).join(' '));
+      try {
+        global.fetch = webRiskListing([]);
+        await runLink('http://169.254.169.254/secret-path-xyz');
+        __setHopRequestForTests(null);
+        __setConnectLookupForTests(async () => [{ address: '10.0.0.5', family: 4 }]);
+        await runLink('http://private-log-check.example.com/secret-path-xyz');
+      } finally {
+        console.error = origError;
+        __setConnectLookupForTests(null);
+        __setHopRequestForTests(hopViaMockedFetch);
+      }
+      check('logs: no link content on the SSRF path', !logged.some((l) => l.includes('secret-path-xyz') || l.includes('private-log-check')), logged);
+    }
+
     // A literal private host is already "danger": Web Risk isn't spent on it
     webRiskUris.length = 0;
     global.fetch = webRiskListing([]);
