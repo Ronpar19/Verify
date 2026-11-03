@@ -8,11 +8,12 @@
 // Also reused (in read-only mode, no checkbox) by LinkCheckerScreen's
 // "terms of use" footer link so users can re-read the terms later.
 
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { SafeAreaView, View, Text, ScrollView, Pressable, TouchableOpacity, StyleSheet, Platform, Linking } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { STRINGS, isRTL, getDeviceDefaultLanguage } from './translations';
 import { getTermsBody, TERMS_KEY, TERMS_UPDATED_DATE } from './terms';
+import { rowDirection, applyDocumentDirection } from './direction';
 import { CheckIcon } from './icons';
 import { COLORS, PRIVACY_URL } from './LinkCheckerScreen';
 import * as Localization from 'expo-localization';
@@ -34,6 +35,7 @@ export default function TermsScreen({ onAccept }) {
   const lang = getDeviceDefaultLanguage(Localization.getLocales ? Localization.getLocales() : []);
   const t = STRINGS[lang];
   const rtl = isRTL(lang);
+  useEffect(() => applyDocumentDirection(lang), [lang]);
   const { text: body, isFallback } = getTermsBody(lang);
   const bodyIsRTL = isFallback ? true : rtl;
 
@@ -74,7 +76,7 @@ export default function TermsScreen({ onAccept }) {
 
         <View style={styles.footer}>
           <TouchableOpacity
-            style={[styles.checkboxRow, { flexDirection: rtl ? 'row-reverse' : 'row' }]}
+            style={[styles.checkboxRow, { flexDirection: rowDirection(rtl) }]}
             onPress={() => setChecked((v) => !v)}
             activeOpacity={0.7}
           >

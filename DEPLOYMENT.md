@@ -110,13 +110,13 @@ before deploying.
 (method/input validation, safe/danger parsing, redirect resolution,
 the connect-time SSRF guard on every hop, the redirect-chain time
 budget, and error fallbacks) against mocked network/DNS/RDAP, so it
-runs offline with no API key or network needed. A second, smaller
-suite covers the app's URL extraction:
+runs offline with no API key or network needed. Two smaller suites
+cover the app:
 ```bash
 node test.mjs                                    # backend, from repo root
-cd mobile && node test-extract-urls.mjs
+cd mobile && node test-extract-urls.mjs && node test-translations.mjs
 ```
-Worth re-running both before every deploy.
+Worth re-running all of them before every deploy.
 
 ## Part C — Set up the Expo frontend
 

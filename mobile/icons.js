@@ -35,15 +35,15 @@ export function LinkLogoIcon({ size = 24, color = '#3F5AE0' }) {
 }
 
 // Globe icon for the language-switch button (top-right).
-export function GlobeIcon({ size = 20, color = '#000' }) {
+export function GlobeIcon({ size = 20, color = '#000', strokeWidth = 1.8 }) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-      <Circle cx="12" cy="12" r="9" stroke={color} strokeWidth="1.8" />
-      <Line x1="3" y1="12" x2="21" y2="12" stroke={color} strokeWidth="1.8" />
+      <Circle cx="12" cy="12" r="9" stroke={color} strokeWidth={strokeWidth} />
+      <Line x1="3" y1="12" x2="21" y2="12" stroke={color} strokeWidth={strokeWidth} />
       <Path
         d="M12 3c2.5 2.5 4 5.7 4 9s-1.5 6.5-4 9c-2.5-2.5-4-5.7-4-9s1.5-6.5 4-9z"
         stroke={color}
-        strokeWidth="1.8"
+        strokeWidth={strokeWidth}
         fill="none"
         strokeLinejoin="round"
       />
@@ -80,12 +80,108 @@ export function CheckIcon({ size = 24, color = '#1FA25A' }) {
   );
 }
 
-// Warning triangle — danger-result icon.
-export function WarningIcon({ size = 24, color = '#E0453F' }) {
+// Warning triangle — uncertain-result icon.
+export function WarningIcon({ size = 24, color = '#8A5B0B', strokeWidth = 2.4 }) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-      <Path d="M12 4L21.5 20H2.5L12 4z" stroke={color} strokeWidth="2.2" strokeLinejoin="round" fill="none" />
-      <Path d="M12 10v4.5M12 17.2v.1" stroke={color} strokeWidth="2.4" strokeLinecap="round" />
+      <Path
+        d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"
+        stroke={color}
+        strokeWidth={strokeWidth}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <Path d="M12 9v4M12 17h.01" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" />
+    </Svg>
+  );
+}
+
+// Crossed-out wifi — "couldn't reach the server" card.
+export function WifiOffIcon({ size = 24, color = '#5F6478', strokeWidth = 2.2 }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M2 2l20 20M8.5 16.5a5 5 0 0 1 7 0M2 8.82a15 15 0 0 1 4.17-2.65M10.66 5c4.01-.36 8.14.9 11.34 3.76M16.85 11.25a10 10 0 0 1 2.22 1.68M5 12.86a10 10 0 0 1 5.17-2.69M12 20h.01"
+        stroke={color}
+        strokeWidth={strokeWidth}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
+
+// Circular arrow — "try again" button.
+export function RetryIcon({ size = 24, color = '#fff', strokeWidth = 2.4 }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5"
+        stroke={color}
+        strokeWidth={strokeWidth}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
+
+// Circled "!" — "this link was not checked" notice, and not-checked rows.
+export function InfoIcon({ size = 24, color = '#5F6478', strokeWidth = 2.2 }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Circle cx="12" cy="12" r="9" stroke={color} strokeWidth={strokeWidth} />
+      <Path d="M12 8v4.5M12 16h.01" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" />
+    </Svg>
+  );
+}
+
+// No-entry circle — "don't tap the link" step.
+export function BanIcon({ size = 24, color = '#B3261E', strokeWidth = 2.2 }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Circle cx="12" cy="12" r="9" stroke={color} strokeWidth={strokeWidth} />
+      <Path d="M5.6 5.6l12.8 12.8" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" />
+    </Svg>
+  );
+}
+
+// Padlock — "don't hand over passwords / codes" step.
+export function LockIcon({ size = 24, color = '#B3261E', strokeWidth = 2.2 }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Rect x="4" y="11" width="16" height="10" rx="2" stroke={color} strokeWidth={strokeWidth} />
+      <Path d="M8 11V7a4 4 0 0 1 8 0v4" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" />
+    </Svg>
+  );
+}
+
+// Trash can — "delete the message, block the sender" step.
+export function TrashIcon({ size = 24, color = '#B3261E', strokeWidth = 2.2 }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M3 6h18M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M9 6V4h6v2"
+        stroke={color}
+        strokeWidth={strokeWidth}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
+
+// Phone handset — "call your bank / the real sender" step.
+export function PhoneIcon({ size = 24, color = '#B3261E', strokeWidth = 2.2 }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.7a2 2 0 0 1-.5 2.1L8 9.8a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.7.7a2 2 0 0 1 1.7 2z"
+        stroke={color}
+        strokeWidth={strokeWidth}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </Svg>
   );
 }
@@ -111,10 +207,10 @@ export function SmileyIcon({ size = 24, color = '#fff' }) {
 }
 
 // Shield — "secure" feature chip.
-export function ShieldIcon({ size = 18, color = '#3F5AE0' }) {
+export function ShieldIcon({ size = 18, color = '#3F5AE0', strokeWidth = 1.8 }) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-      <Path d="M12 3l7 3v6c0 5-3.5 7.5-7 9-3.5-1.5-7-4-7-9V6l7-3z" stroke={color} strokeWidth="1.8" fill="none" />
+      <Path d="M12 3l7 3v6c0 5-3.5 7.5-7 9-3.5-1.5-7-4-7-9V6l7-3z" stroke={color} strokeWidth={strokeWidth} fill="none" />
     </Svg>
   );
 }
