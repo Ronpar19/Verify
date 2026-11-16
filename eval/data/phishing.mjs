@@ -295,6 +295,12 @@ export const PHISHING = {
     { url: 'https://misim-refund.xyz/', chain: ['https://www.gov.il/he'] },
     { url: 'http://45.33.12.9/r/8842', chain: ['https://www.google.com/'], expect: 'danger' },
     { url: 'https://secure-isracard.com/x', chain: ['https://example.com/'] },
+    // Misspelled brand addresses that forward to the real brand. Some are
+    // the brand's own defensive registrations, some are cloaked scams; from
+    // the link alone they are identical, so the expected answer is a
+    // caution either way (owner to confirm this labelling).
+    { url: 'http://gooogle.com/', chain: ['https://www.google.com/'] },
+    { url: 'https://www.paypa1.com/', chain: ['https://www.paypal.com/'] },
   ],
   // The three hard rules. These must come back "danger" on their own.
   'hard-rules': [

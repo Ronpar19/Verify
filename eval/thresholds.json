@@ -1,7 +1,8 @@
 {
-  "maxFalsePositiveRate": 0.093,
-  "maxFalsePositiveRateIsraeli": 0.04,
+  "maxFalsePositiveRate": 0.01,
+  "maxFalsePositiveRateIsraeli": 0.01,
+  "maxFalsePositiveRateHoldout": 0.02,
   "maxLegitMarkedDanger": 0,
-  "minRecall": 0.60,
-  "maxHardRuleMisses": 1
+  "minRecall": 0.92,
+  "maxHardRuleMisses": 0
 }

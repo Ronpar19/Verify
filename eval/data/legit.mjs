@@ -429,8 +429,6 @@ export const LEGIT = {
     { url: 'https://click.mail.some-store.co.il/track?u=123&id=abc', chain: ['https://www.some-store.co.il/sale?utm_source=newsletter'] },
     { url: 'https://email.mg.some-saas.com/c/eJxabc', chain: ['https://app.some-saas.com/invoices/123'] },
     { url: 'https://paypal.me/someone', chain: ['https://www.paypal.com/paypalme/someone'] },
-    { url: 'http://gooogle.com/', chain: ['https://www.google.com/'] },
-    { url: 'https://www.paypa1.com/', chain: ['https://www.paypal.com/'] },
     { url: 'https://s.click.aliexpress.com/e/_AbCdEf', chain: ['https://www.aliexpress.com/item/1005001234567890.html'] },
     { url: 'https://forms.gle/AbCdEf123', chain: ['https://docs.google.com/forms/d/e/1FAIpQLSc/viewform?usp=send_form'] },
   ],

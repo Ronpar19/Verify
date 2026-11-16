@@ -5,6 +5,8 @@ import handler, {
 import statsHandler from './api/stats.js';
 import { __setRedisForTests } from './api/_lib/redis.js';
 import { infrastructureAnalysis, __setDnsForTests, __setRdapFetchForTests } from './api/_lib/infrastructure.js';
+import { BRANDS, TRUSTED_SUFFIXES, OTHER_KNOWN_DOMAINS, SHORTENERS, SUSPICIOUS_TLDS } from './api/_data/known-domains.js';
+import psl from 'psl';
 
 let pass = 0, fail = 0;
 function check(name, cond, extra) {
@@ -1385,6 +1387,145 @@ async function run() {
     check('stats -> webRisk block', wr && wr.month === month && wr.calls === 4 && wr.checksWithoutWebRisk === 2 && wr.freeMonthlyCalls === 100000, statsRes._json);
     delete process.env.STATS_SECRET;
     __setRedisForTests(null);
+  }
+
+  // --- 66. Look-alike detection, driven by api/_data/known-domains.js ---
+  {
+    const h = (u) => heuristicAnalysis(u, 'he');
+    const has = (u, sig) => h(u).signals.includes(sig);
+    const clean = (u) => h(u).score < 2;
+
+    // An ordinary word that is also a brand only counts next to scam words.
+    for (const u of ['https://www.discount-sofa.co.il/', 'https://www.max-fitness.co.il/', 'https://www.bankofamerica.com/',
+      'https://www.discounttire.com/', 'https://www.applebees.com/', 'https://www.pineapple.com/', 'https://www.googleplex-fanclub.org/',
+      'https://www.partners.com/', 'https://www.partner-portal.example.com/', 'https://www.goggle.com/'.replace('goggle', 'mango'),
+      'https://www.jpost.com/', 'https://www.nypost.com/', 'https://www.rei.com/account/login', 'https://www.accountingtools.com/articles/update']) {
+      check(`brand-like word, no mimicry -> clean: ${u}`, clean(u), h(u));
+    }
+    for (const u of ['https://max-card-update.com/', 'https://cal-online-verify.com/', 'https://gov-il-refund.com/tax',
+      'https://secure-isracard.com/', 'https://leumionline.com/', 'https://israelpost-redelivery.com/', 'https://iec-bill-pay.com/',
+      'https://leumi-login.web.app/', 'https://isracard.net/', 'https://israelpost.online/']) {
+      check(`borrowed name -> brandImpersonation: ${u}`, has(u, 'brandImpersonation'), h(u));
+    }
+    check('borrowed name + scam word carries the mimicry marker', has('https://leumi-login.com/', 'brandWithUrgency'), h('https://leumi-login.com/'));
+    check('official name on another ending carries its marker', has('https://isracard.net/', 'brandExactOtherTld'), h('https://isracard.net/'));
+    check('a body that owns many endings: bare name not flagged', clean('https://www.google.de/') && clean('https://www.amazon.nl/'), [h('https://www.google.de/'), h('https://www.amazon.nl/')]);
+
+    // Near-miss spellings.
+    for (const [u, brand] of [['https://www.leurni.co.il/', 'leumi.co.il'], ['https://www.arnazon.com/', 'amazon.com'], ['https://www.lemui.co.il/', 'leumi.co.il'],
+      ['https://www.1eumi.co.il/', 'leumi.co.il'], ['https://bank-hapoalim.com/', 'bankhapoalim.co.il'], ['https://www.mizrachi-tefahot.co.il/', 'mizrahi-tefahot.co.il'],
+      ['https://www.kvish-6.co.il/', 'kvish6.co.il'], ['https://www.isracrad.co.il/', 'isracard.co.il'], ['https://www.aliexpres.com/', 'aliexpress.com']]) {
+      const r = h(u);
+      check(`near-miss -> typosquat naming ${brand}: ${u}`, r.signals.includes('typosquat') && r.reasons.some((x) => x.includes(brand)), r);
+    }
+    check('near-miss in one part of the name needs a scam word next to it', !has('https://www.netflex-gym.co.il/', 'typosquat') && has('https://netflex-login.com/', 'typosquat'), [h('https://www.netflex-gym.co.il/'), h('https://netflex-login.com/')]);
+
+    // A domain with no name at all, built from the scam's story.
+    check('scenario words + country -> scamScenario', has('https://il-customs-fee.com/', 'scamScenario') && has('https://parcel-notice-il.com/', 'scamScenario'), h('https://il-customs-fee.com/'));
+    check('one scenario word + country is not enough', clean('https://www.israel-delivery.com/') && clean('https://www.pay-il.com/'), h('https://www.israel-delivery.com/'));
+
+    // Hebrew/Arabic names are names, not disguises; Cyrillic still is one.
+    for (const u of ['https://www.ישראל.co.il/', 'https://פיצה-טעימה.co.il/', 'https://דואר.ישראל/', 'https://موقع.com/']) {
+      check(`native-script name -> clean: ${u}`, clean(u) && !has(u, 'punycode'), h(u));
+    }
+    check('Cyrillic look-alike still flagged', has('https://www.аpple.com/', 'homoglyph') && has('https://www.аррӏе.com/', 'punycode'), h('https://www.аррӏе.com/'));
+
+    // Reason texts exist in every language.
+    for (const lang of ['he', 'en', 'ru', 'fr', 'ar']) {
+      const r = heuristicAnalysis('https://il-customs-fee.com/', lang);
+      check(`scamScenario text present (${lang})`, r.signals.includes('scamScenario') && typeof r.signalTexts.scamScenario === 'string' && r.signalTexts.scamScenario.length > 20, r);
+    }
+    const texts = ['he', 'en', 'ru', 'fr', 'ar'].map((l) => heuristicAnalysis('https://il-customs-fee.com/', l).signalTexts.scamScenario);
+    check('scamScenario text differs per language', new Set(texts).size === 5, texts);
+  }
+
+  // --- 67. The data file itself: well-formed, no overlaps, nothing risky ---
+  {
+    const all = [...BRANDS.flatMap((b) => b.domains), ...OTHER_KNOWN_DOMAINS];
+    check('known domains: no duplicates', new Set(all).size === all.length, all.filter((d, i) => all.indexOf(d) !== i));
+    check('known domains: lowercase host names only', all.every((d) => /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/.test(d) && d.includes('.')), all.filter((d) => !/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/.test(d)));
+    // Trusting a public suffix would trust everyone who can register under it.
+    const isSuffix = (d) => { const p = psl.parse(d); return !p.domain; };
+    check('known domains: none is a public suffix', all.every((d) => !isSuffix(d) || TRUSTED_SUFFIXES.includes(d)), all.filter((d) => isSuffix(d) && !TRUSTED_SUFFIXES.includes(d)));
+    const openHosting = ['blogspot.com', 'web.app', 'pages.dev', 'github.io', 'vercel.app', 'netlify.app', 'firebaseapp.com', 'wixsite.com', 'weebly.com', 'wordpress.com', 'herokuapp.com', 'workers.dev', 'duckdns.org'];
+    check('known domains: no open hosting platform', all.every((d) => !openHosting.some((o) => d === o || d.endsWith('.' + o))), all);
+    check('brand ids unique', new Set(BRANDS.map((b) => b.id)).size === BRANDS.length);
+    check('every brand has arrays and a domain to show', BRANDS.every((b) => Array.isArray(b.domains) && Array.isArray(b.strong) && Array.isArray(b.words) && (b.official || b.domains[0])), BRANDS.filter((b) => !(b.official || b.domains[0])));
+    check('brand keywords: lowercase letters/digits only', BRANDS.every((b) => [...b.strong, ...b.words].every((k) => /^[a-z0-9]+$/.test(k))));
+    check('shorteners and TLD lists well-formed', SHORTENERS.every((d) => d.includes('.')) && SUSPICIOUS_TLDS.every((t) => /^\.[a-z]+$/.test(t)));
+    // Every official domain must itself come out clean.
+    const dirty = all.filter((d) => heuristicAnalysis('https://www.' + d + '/', 'en').score >= 2);
+    check('every known domain is clean under the heuristic', dirty.length === 0, dirty);
+  }
+
+  // --- 68. Cloaking and the hard rules across a redirect chain ---
+  {
+    const chainFetch = (map) => async (url, opts) => {
+      if (opts.redirect === 'manual') {
+        const to = map[url];
+        return to ? { status: 302, headers: { get: (hd) => (hd === 'location' ? to : null) } } : { status: 200, headers: { get: () => null } };
+      }
+      return { ok: true, json: async () => ({}) };
+    };
+    const run = async (link, map, lang) => { global.fetch = chainFetch(map); const res = mockRes(); await handler({ method: 'POST', body: { link, lang } }, res); return res._json; };
+
+    let r = await run('http://45.33.12.9/r/8842', { 'http://45.33.12.9/r/8842': 'https://www.google.com/' });
+    check('raw-IP hop forwarding to a well-known site -> still danger', r.status === 'danger' && r.details.includes('IP ציבורית'), r);
+
+    r = await run('https://leumi-secure-login.com/a', { 'https://leumi-secure-login.com/a': 'https://www.google.com/' });
+    check('scam-looking address cloaked behind google.com -> uncertain', r.status === 'uncertain', r);
+    check('cloaking reason says it is about the address received', r.details.includes('בכתובת שקיבלתם'), r);
+
+    r = await run('https://www.paypa1.com/', { 'https://www.paypa1.com/': 'https://www.paypal.com/' });
+    check('misspelled brand forwarding to the real brand -> uncertain', r.status === 'uncertain' && r.details.includes('paypal.com'), r);
+
+    r = await run('https://misim-refund.xyz/', { 'https://misim-refund.xyz/': 'https://www.gov.il/he' }, 'en');
+    check('cloaked cheap-TLD address -> uncertain, English prefix', r.status === 'uncertain' && r.details.includes('In the address you received'), r);
+
+    // Ordinary redirects must stay clean.
+    r = await run('https://bit.ly/3AbCdEf', { 'https://bit.ly/3AbCdEf': 'https://www.ynet.co.il/news/article/abc' });
+    check('shortener -> known news site -> safe', r.status === 'safe', r);
+    r = await run('http://www.leumi.co.il/', { 'http://www.leumi.co.il/': 'https://www.leumi.co.il/' });
+    check('http -> https upgrade on the same site -> safe', r.status === 'safe', r);
+    r = await run('https://click.mail.some-store.co.il/track?u=1', { 'https://click.mail.some-store.co.il/track?u=1': 'https://www.some-store.co.il/sale' });
+    check('mail tracker -> shop -> safe', r.status === 'safe', r);
+
+    // .il: Hebrew-named site is safe end to end; mimicry on .il is not.
+    r = await run('https://פיצה-טעימה.co.il/', {});
+    check('Hebrew-named .il site -> safe', r.status === 'safe', r);
+    r = await run('https://www.mizrahi-catering.co.il/', {});
+    check('surname that is also a bank name, .il -> safe', r.status === 'safe', r);
+    r = await run('https://www.isracard.org.il/', {});
+    check('official name on another .il ending -> uncertain', r.status === 'uncertain', r);
+  }
+
+  // --- 69. Domain age steps, and the browser-like headers on each hop ---
+  {
+    __setDnsForTests(makeFakeDns({ a: ['93.184.216.34'] }));
+    const ageOf = async (days) => {
+      __setRdapFetchForTests(async () => ({ ok: true, json: async () => ({ events: [{ eventAction: 'registration', eventDate: new Date(Date.now() - days * 86400000 - 3600000).toISOString() }] }) }));
+      return (await infrastructureAnalysis('https://some-new-site.com/', 'he')).score;
+    };
+    check('age 3 days -> 3', (await ageOf(3)) === 3);
+    check('age 20 days -> 2 (enough for "uncertain" on its own)', (await ageOf(20)) === 2);
+    check('age 60 days -> 1 (a nudge only)', (await ageOf(60)) === 1);
+    check('age 120 days -> 0', (await ageOf(120)) === 0);
+    __setDnsForTests(makeFakeDns());
+    __setRdapFetchForTests(makeFakeRdapFetch());
+
+    const http = await import('node:http');
+    const plainLookup = (host, opts, cb) => {
+      if (typeof opts === 'function') { cb = opts; opts = {}; }
+      return opts && opts.all ? cb(null, [{ address: '127.0.0.1', family: 4 }]) : cb(null, '127.0.0.1', 4);
+    };
+    let seen = null;
+    const server = http.createServer((req, res) => { seen = req.headers; res.writeHead(200); res.end(); });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    await __guardedHopForTests(`http://local-test.example:${server.address().port}/`, 'HEAD', 2000, plainLookup);
+    await new Promise((resolve) => server.close(resolve));
+    check('hop sends a browser User-Agent', !!seen && /Mozilla\/5\.0 .*Mobile Safari/.test(seen['user-agent'] || ''), seen);
+    check('hop sends Accept-Language', !!seen && /he-IL/.test(seen['accept-language'] || ''), seen);
+    check('hop sends no cookies, referrer or client hints', !!seen && !seen.cookie && !seen.referer && !Object.keys(seen).some((k) => k.startsWith('sec-') || k.startsWith('x-')), seen);
   }
 
   console.log('\n' + pass + ' passed, ' + fail + ' failed');

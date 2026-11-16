@@ -247,10 +247,17 @@ export async function infrastructureAnalysis(finalUrl, lang) {
     // Weak/moderate on purpose, per the design brief: a new domain alone
     // is not phishing (a legitimate business launches new domains too).
     if (ageDays !== null && ageDays >= 0) {
+      // Under a week: strong. Under a month: enough on its own for "be
+      // careful" -- most phishing domains are used and dropped within
+      // weeks of registration. Under three months: a nudge that only
+      // matters next to another signal.
       if (ageDays < 7) {
         score += 3;
         reasons.push(m.veryNewDomain(ageDays));
       } else if (ageDays < 30) {
+        score += 2;
+        reasons.push(m.newDomain(ageDays));
+      } else if (ageDays < 90) {
         score += 1;
         reasons.push(m.newDomain(ageDays));
       }

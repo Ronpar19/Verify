@@ -57,7 +57,7 @@ project is interesting* below for why.)
   (IPv4 and IPv6), under a 10-second budget for the whole chain
 - Per-IP rate limiting, shared-secret request auth, and privacy-
   conscious usage stats, all backed by Upstash Redis
-- 1409 automated tests across three suites (369 for backend detection
+- 1486 automated tests across three suites (446 for backend detection
   logic + API behavior, 15 for URL extraction, 1025 for translations),
   zero live network calls required to run any of them
 
@@ -140,6 +140,31 @@ blindly would give users false confidence.
 explicitly forbids commercial use and is officially deprecated. Web
 Risk is the supported, commercially-usable successor, chosen
 deliberately for a project meant to be maintained long-term.
+
+## Measuring accuracy
+
+`npm run eval` runs 550 labelled legitimate links (321 Israeli; 173 of
+them held out from tuning) and 297 phishing patterns through the real
+handler with the network mocked, and prints false-positive rate,
+recall, precision and a confusion table per category. With Web Risk
+answering "clean" for everything — i.e. measuring only what is caught
+*before* Google lists a link:
+
+| | Before | After |
+|---|---|---|
+| False positives, legitimate links | 9.2% | 0.4% |
+| False positives, Israeli legitimate | 3.9% | 0.3% |
+| False positives, held-out links (never tuned on) | — | 1.2% |
+| Phishing patterns caught | 60.3% | 94.6% |
+
+The phishing set is made-up patterns modelled on scams reported in
+Israel, not live samples, so these are not real-world rates — see
+[`eval/README.md`](./eval/README.md). CI fails any change that crosses
+`eval/thresholds.json`.
+
+Who the well-known bodies are, their official domains, and the word
+lists live in [`api/_data/known-domains.js`](./api/_data/known-domains.js),
+separate from the detection logic.
 
 ## Tech stack
 

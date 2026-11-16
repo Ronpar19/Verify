@@ -33,6 +33,10 @@ import punycode from 'punycode/punycode.js';
 import { getRedis } from './_lib/redis.js';
 import { recordCheck } from './_lib/stats.js';
 import { infrastructureAnalysis, isNonPublicIp } from './_lib/infrastructure.js';
+import {
+  BRANDS, TRUSTED_SUFFIXES, OTHER_KNOWN_DOMAINS, SHORTENERS, SUSPICIOUS_TLDS,
+  CONTEXT_WORDS, SCENARIO_WORDS, GEO_WORDS,
+} from './_data/known-domains.js';
 
 const THREAT_TYPES = ['MALWARE', 'SOCIAL_ENGINEERING', 'UNWANTED_SOFTWARE'];
 const MAX_REDIRECTS = 5;
@@ -126,6 +130,8 @@ const MESSAGES = {
       randomHostname: 'שם המארח נראה אקראי באופן חריג',
       ipLikeDomain: 'תחילת שם הדומיין נראית כמו כתובת IP — ייתכן שזה ניסיון להטעות במבט מהיר',
       redirectIncomplete: 'לא הצלחנו לעקוב אחרי שרשרת ההפניות עד היעד הסופי, ולכן היעד האמיתי לא נבדק',
+      scamScenario: 'שם הדומיין מורכב ממילים שאופייניות להודעות הונאה (משלוח, החזר, תשלום) ולא משם של חברה או גוף מוכר',
+      originalLinkPrefix: 'בכתובת שקיבלתם, לפני שהיא מפנה הלאה: ',
       comboBonus: 'השילוב של כמה סימנים חשודים יחד תואם דפוס הונאה מוכר',
       noneFound: 'לא זוהו סימנים חשודים בולטים במבנה הקישור',
       parseFailed: 'לא הצלחנו לנתח את מבנה הכתובת',
@@ -166,6 +172,8 @@ const MESSAGES = {
       randomHostname: 'The hostname looks unusually random',
       ipLikeDomain: 'The start of the domain name looks like an IP address — possibly meant to mislead at a glance',
       redirectIncomplete: 'We could not follow the redirect chain all the way to its final destination, so the real destination was not checked',
+      scamScenario: "The domain name is made of words typical of scam messages (delivery, refund, payment) rather than the name of a real company or organisation",
+      originalLinkPrefix: 'In the address you received, before it forwards elsewhere: ',
       comboBonus: 'The combination of several suspicious signals together matches a known phishing pattern',
       noneFound: "No notable suspicious signs were detected in the link's structure",
       parseFailed: 'We could not parse the structure of this address',
@@ -206,6 +214,8 @@ const MESSAGES = {
       randomHostname: 'Имя хоста выглядит необычно случайным',
       ipLikeDomain: 'Начало доменного имени выглядит как IP-адрес — возможно, чтобы ввести в заблуждение при беглом взгляде',
       redirectIncomplete: 'Не удалось пройти всю цепочку перенаправлений до конечного адреса, поэтому настоящий адрес назначения не проверен',
+      scamScenario: 'Имя домена составлено из слов, типичных для мошеннических сообщений (доставка, возврат, оплата), а не из названия реальной компании или организации',
+      originalLinkPrefix: 'В адресе, который вы получили, до перенаправления: ',
       comboBonus: 'Сочетание нескольких подозрительных признаков вместе соответствует известной схеме фишинга',
       noneFound: 'Явных подозрительных признаков в структуре ссылки не обнаружено',
       parseFailed: 'Не удалось разобрать структуру этого адреса',
@@ -246,6 +256,8 @@ const MESSAGES = {
       randomHostname: "Le nom d'hôte semble anormalement aléatoire",
       ipLikeDomain: "Le début du nom de domaine ressemble à une adresse IP — peut-être pour tromper au premier coup d'œil",
       redirectIncomplete: "Nous n'avons pas pu suivre la chaîne de redirections jusqu'à sa destination finale, la vraie destination n'a donc pas été vérifiée",
+      scamScenario: "Le nom de domaine est composé de mots typiques des messages frauduleux (livraison, remboursement, paiement) et non du nom d'une vraie entreprise ou d'un organisme",
+      originalLinkPrefix: "Dans l'adresse que vous avez reçue, avant sa redirection : ",
       comboBonus: 'La combinaison de plusieurs signes suspects correspond à un schéma de phishing connu',
       noneFound: "Aucun signe suspect notable n'a été détecté dans la structure du lien",
       parseFailed: "Nous n'avons pas pu analyser la structure de cette adresse",
@@ -286,6 +298,8 @@ const MESSAGES = {
       randomHostname: 'اسم المضيف يبدو عشوائيًا بشكل غير معتاد',
       ipLikeDomain: 'بداية اسم النطاق مبنية لتبدو كعنوان IP — ربما بهدف التضليل للوهلة الأولى',
       redirectIncomplete: 'تعذّر تتبّع سلسلة إعادة التوجيه حتى الوجهة النهائية، لذلك لم يتم فحص الوجهة الحقيقية',
+      scamScenario: 'اسم النطاق مكوَّن من كلمات شائعة في رسائل الاحتيال (توصيل، استرداد، دفع) وليس من اسم شركة أو جهة حقيقية',
+      originalLinkPrefix: 'في العنوان الذي وصلك، قبل إعادة التوجيه: ',
       comboBonus: 'يتطابق مزيج عدة علامات مشبوهة معًا مع نمط تصيّد احتيالي معروف',
       noneFound: 'لم يتم رصد علامات مشبوهة واضحة في بنية الرابط',
       parseFailed: 'تعذّر تحليل بنية هذا العنوان',
@@ -293,61 +307,18 @@ const MESSAGES = {
   },
 };
 
-const SHORTENERS = ['bit.ly','tinyurl.com','t.co','goo.gl','ow.ly','is.gd','buff.ly','rebrand.ly','cutt.ly','shorte.st','tiny.cc','rb.gy','shorturl.at','t.ly'];
-const SUSPICIOUS_TLDS = ['.tk','.ml','.ga','.cf','.gq','.xyz','.top','.click','.work','.loan','.win','.rest'];
-const GLOBAL_SAFE_DOMAINS = ['google.com','facebook.com','amazon.com','apple.com','microsoft.com','netflix.com','paypal.com','instagram.com','whatsapp.com','youtube.com','wikipedia.org'];
-
-// Israeli banks, credit-card/clearing companies, health funds, insurers,
-// telecoms, logistics carriers, transport operators and government bodies —
-// common phishing targets, curated from a verified domain list. 'gov.il' on
-// its own already covers every *.gov.il subdomain (data.gov.il, btl.gov.il,
-// ...), so those are intentionally not listed individually.
-const ISRAELI_SAFE_DOMAINS = [
-  'gov.il',
-  // Banks
-  'leumi.co.il','bankhapoalim.co.il','hapoalim.co.il','discountbank.co.il',
-  'mizrahi-tefahot.co.il','fibi.co.il','bank-yahav.co.il','bankjerusalem.co.il',
-  'massad.co.il','bankmassad.co.il','mercantile.co.il','onezero.co.il',
-  'onezerobank.com','esh.com','ubank.co.il','israelpost.co.il','boi.org.il',
-  'bankotsar.co.il','pepper.co.il','barclays.com','hsbc.co.il','sbi.co.in','bank.sbi',
-  // Credit cards & clearing
-  'isracard.co.il','digital.isracard.co.il','cal-online.co.il','max.co.il',
-  'diners.co.il','americanexpress.co.il','tranzila.com','cardcom.solutions',
-  'cardcom.co.il','shva.co.il','masav.co.il',
-  // Health funds
-  'clalit.co.il','maccabi4u.co.il','meuhedet.co.il','leumit.co.il',
-  // Insurance
-  'harel-group.co.il','fnx.co.il','migdal.co.il','menoramivt.co.il',
-  'ayalon-ins.co.il','shlomo-bit.co.il','aig.co.il','we-sure.co.il',
-  'shomera.co.il','bth.co.il',
-  // Telecom
-  'cellcom.co.il','partner.co.il','pelephone.co.il','hotmobile.co.il',
-  '019mobile.co.il','wecom.co.il','golantelecom.co.il','rami-levy.co.il',
-  'bezeq.co.il','hot.net.il','yes.co.il',
-  // Shipping & logistics
-  'chitadelivery.co.il','cheetah-shops.co.il','hfd.co.il','e-post.co.il',
-  'epost.co.il','cargo.co.il','tapuzdelivery.co.il','tapuzdelivery.com',
-  'bar-ltd.co.il','boxit.co.il','dhl.co.il','dhl.com','ups.com','fedex.com',
-  'orian.com','flyingcargo.com','gaashwd.com','gcx.co.il','ushops.co.il',
-  'getpackage.com','getexpress.co.il','dealdelivery.co.il','delivery.yango.com',
-  'wolt.com','d2d.co.il','fritz.co.il','pickpack.co.il','zig-zag.co.il',
-  'downtown.co.il','ydm.co.il','nonstopb.co.il','amagon.co.il','gett.com',
-  // Transportation
-  'ravkavonline.co.il','pti.org.il','ayalonhw.co.il','kvish6.co.il',
-  'egged.co.il','dan.co.il','metropoline.com','kavim-t.com','nateevexpress.com',
-  // Aviation
-  'israir.co.il','arkia.co.il','elal.com',
-  // Energy
-  'iec.co.il','pazgas.co.il','supergas.co.il','amisragas.co.il',
-  // Retail & price comparison
-  'shufersal.co.il','victory.co.il','osherad.co.il','zap.co.il','wisebuy.co.il',
-  // Other government / public bodies
-  'idf.il','clalbit.co.il',
-];
-
-const KNOWN_SAFE_DOMAINS = [...GLOBAL_SAFE_DOMAINS, ...ISRAELI_SAFE_DOMAINS];
-const BRAND_KEYWORDS = ['paypal','amazon','microsoft','apple','google','facebook','netflix','bituach','bank','leumi','hapoalim','discount','mizrahi','postil','paybox'];
+// Who the well-known bodies are, and the word lists, live in
+// api/_data/known-domains.js (data, maintained separately from this logic).
+// Everything below is derived from it once, at module load.
+const KNOWN_SAFE_DOMAINS = [...new Set([...TRUSTED_SUFFIXES, ...BRANDS.flatMap((b) => b.domains), ...OTHER_KNOWN_DOMAINS])];
 const URGENT_WORDS = ['verify','confirm','update','secure','suspended','urgent','login','password','account'];
+const CONTEXT_SET = new Set(CONTEXT_WORDS);
+const SCENARIO_SET = new Set(SCENARIO_WORDS);
+const GEO_SET = new Set(GEO_WORDS);
+
+function isKnownSafeHost(hostname) {
+  return KNOWN_SAFE_DOMAINS.some((d) => hostname === d || hostname.endsWith('.' + d));
+}
 
 // ---------- rate limiting (per IP, via Upstash Redis) ----------
 //
@@ -598,7 +569,7 @@ export default async function handler(req, res) {
   // as long as webRiskPromise took (they started together), so this await
   // typically adds little to no extra wall-clock time on top of Web Risk's
   // own latency.
-  let heuristic = heuristicAnalysis(finalUrl, lang);
+  let heuristic = carryEarlierHopSignals(heuristicAnalysis(finalUrl, lang), chain.visited, lang);
   if (chain.rawIpUrl && !heuristic.signals.includes('publicIp')) {
     // A raw IP earlier in the chain, redirecting on to a domain -- still
     // the same high-confidence pattern (see resolveFinalUrl).
@@ -629,6 +600,11 @@ export default async function handler(req, res) {
     if (combinedVerdict === 'safe') combinedVerdict = 'uncertain';
   }
 
+  // The hard rules decide on their own, whatever the score says: a raw-IP
+  // hop that forwards to a well-known site would otherwise have its score
+  // cancelled out by that site's good name.
+  if (heuristic.highConfidence && combinedVerdict !== 'unsafe') combinedVerdict = 'uncertain';
+
   if (!webRiskResult) {
     // Web Risk unavailable (bad/missing key, network error, quota) — the
     // heuristic + infrastructure signals are all we have. They can still
@@ -637,6 +613,7 @@ export default async function handler(req, res) {
     // never "safe" (owner's decision -- a listed malware URL has a perfectly
     // ordinary structure).
     const statusMap = { safe: 'uncertain', uncertain: 'uncertain', unsafe: 'danger' };
+    if (heuristic.highConfidence) combinedVerdict = 'unsafe';
     return sendVerdict(req, res, statusMap[combinedVerdict], m.heuristicOnlyPrefix + combinedReasons.join('; '), webRiskMeta);
   }
 
@@ -665,7 +642,7 @@ export default async function handler(req, res) {
   // any other link (nothing here skips it), but it's tuned on global
   // patterns and routinely fires mild, generic signals on smaller/older
   // Israeli business sites (plain http, a bank/insurer name that happens to
-  // match a BRAND_KEYWORDS entry without being in KNOWN_SAFE_DOMAINS, etc.).
+  // match a brand name from api/_data/known-domains.js, etc.).
   // Once Web Risk's authoritative known-threat lists come back clean and
   // there's no actual smoking-gun pattern (highConfidence, already ruled
   // out above), don't let that generic noise downgrade the result to
@@ -694,6 +671,48 @@ export default async function handler(req, res) {
   // hand out false confidence, but don't cry "danger" on a legitimate
   // site either.
   return sendVerdict(req, res, 'uncertain', m.uncertainPrefix + combinedReasons.join('; '), webRiskMeta);
+}
+
+// ---------- cloaking: what the link in the message itself looked like ----------
+//
+// The verdict is about the destination, but a scam link can show servers
+// like ours a harmless destination ("cloaking": leumi-secure-login.com
+// forwards datacenter traffic to google.com and real phones to the scam).
+// So the strong, name-based signals of every EARLIER address in the chain
+// are carried over to the final answer. Deliberately not carried: plain
+// http, a shortener, long/encoded URLs -- ordinary for trackers and
+// http->https upgrades. A look-alike that forwards to the very brand it
+// imitates is carried too: a defensive registration and a cloaked scam
+// look identical from here, and "be careful" is the honest answer to a
+// misspelled bank address in a message.
+const CARRIED_SIGNALS = ['typosquat', 'subdomainDecoy', 'homoglyph', 'punycode', 'suspiciousTld', 'ipLikeDomain', 'brandImpersonation', 'scamScenario'];
+const CARRIED_MARKERS = ['brandWithUrgency', 'brandExactOtherTld'];
+
+function carryEarlierHopSignals(heuristic, visited, lang) {
+  if (!Array.isArray(visited) || visited.length < 2) return heuristic;
+  const r = MESSAGES[lang].heuristicReasons;
+  const seenDomains = new Set([heuristic.registrableDomain]);
+  let out = heuristic;
+  for (const hopUrl of visited.slice(0, -1)) {
+    const hop = heuristicAnalysis(hopUrl, lang);
+    if (!hop.registrableDomain || seenDomains.has(hop.registrableDomain)) continue;
+    seenDomains.add(hop.registrableDomain);
+    for (const sig of CARRIED_SIGNALS) {
+      if (!hop.signals.includes(sig) || out.signals.includes(sig)) continue;
+      const markers = CARRIED_MARKERS.filter((k) => sig === 'brandImpersonation' && hop.signals.includes(k) && !out.signals.includes(k));
+      out = {
+        ...out,
+        // At least "uncertain": the destination's good name (a known
+        // domain lowers the score) must not cancel out what the address
+        // in the message looked like -- that is exactly what cloaking
+        // relies on.
+        score: Math.max(2, out.score + (hop.signalScores[sig] || 0)),
+        reasons: [...out.reasons.filter((x) => x !== r.noneFound), r.originalLinkPrefix + hop.signalTexts[sig]],
+        signals: [...out.signals, sig, ...markers],
+      };
+    }
+  }
+  return out;
 }
 
 function normalizeUrl(raw) {
@@ -746,7 +765,8 @@ const IL_WEAK_SIGNALS = new Set(['insecureHttp', 'urgentWords', 'urlComplexity',
 // match an unrelated domain that merely ends in the letters "il" (e.g.
 // "devil.com" ends in "com", not ".il").
 function isIsraeliDomain(hostname) {
-  return typeof hostname === 'string' && /\.il$/i.test(hostname);
+  // .il, or its Hebrew twin .ישראל (xn--4dbrk0ce).
+  return typeof hostname === 'string' && /\.(il|xn--4dbrk0ce)$/i.test(hostname.replace(/\.+$/, ''));
 }
 
 async function fetchWithTimeout(url, options) {
@@ -833,6 +853,17 @@ function hopTimeoutError(message) {
 // One HEAD/GET with no redirect following, shaped like the bit of a fetch
 // Response resolveFinalUrl() reads ({ status, headers.get }). The body is
 // never read — only the status line and Location header matter here.
+// Sent on every hop. The question is "where does this link take the
+// person who taps it", and many sites answer a request with no User-Agent
+// differently (a 403, or no redirect at all) -- so the hops present
+// themselves as an ordinary Android phone in Israel. Fixed strings only:
+// nothing here depends on, or reveals, who asked for the check.
+const HOP_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+  'Accept-Language': 'he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7',
+};
+
 function guardedHop(url, method, timeoutMs, lookup = guardedLookup) {
   return new Promise((resolve, reject) => {
     let req, timer;
@@ -843,7 +874,7 @@ function guardedHop(url, method, timeoutMs, lookup = guardedLookup) {
       const u = new URL(url);
       const mod = u.protocol === 'https:' ? https : u.protocol === 'http:' ? http : null;
       if (!mod) throw new Error('Unsupported protocol ' + u.protocol);
-      req = mod.request(u, { method, lookup }, (resp) => {
+      req = mod.request(u, { method, lookup, headers: HOP_HEADERS }, (resp) => {
         const headers = resp.headers;
         resolve({
           status: resp.statusCode,
@@ -1107,62 +1138,211 @@ function safePslParse(hostname) {
   }
 }
 
-// ---------- Levenshtein edit distance (typosquat detection) ----------
+// ---------- look-alike detection ----------
+//
+// Built once from BRANDS. Three lookups:
+//   STRONG  distinctive names  -> the brand that owns them
+//   WORDS   ordinary words     -> the brand (only meaningful with context)
+//   TYPO_TARGETS  every spelling a typosquatter would aim at (official
+//           second-level names + strong names), with the official domain
+//           to show the user.
+const STRONG = new Map();
+const WORDS = new Map();
+const TYPO_TARGETS = new Map(); // target spelling (hyphens removed) -> { official, raw: Set of official raw spellings }
+const OFFICIAL_SLDS = new Map(); // official second-level name (raw) -> brand
+for (const brand of BRANDS) {
+  const official = brand.official || brand.domains[0] || null;
+  const skip = new Set(brand.noTypo || []);
+  for (const kw of brand.strong) STRONG.set(kw, brand);
+  for (const kw of brand.words) WORDS.set(kw, brand);
+  const addTarget = (raw) => {
+    const flat = raw.replace(/-/g, '');
+    if (flat.length < 4 || skip.has(raw) || /^\d+$/.test(flat)) return;
+    if (!TYPO_TARGETS.has(flat)) TYPO_TARGETS.set(flat, { official, raw: new Set() });
+    TYPO_TARGETS.get(flat).raw.add(raw);
+  };
+  for (const d of brand.domains) {
+    const parsed = safePslParse(d);
+    const sld = parsed && parsed.sld;
+    if (!sld || sld.length < 2) continue; // "gov.il" itself has no name part
+    OFFICIAL_SLDS.set(sld, brand);
+    addTarget(sld);
+  }
+  for (const kw of brand.strong) addTarget(kw);
+}
 
-function levenshteinDistance(a, b) {
+// Number-for-letter swaps (paypa1, g00gle, micr0soft). "1" stands in for
+// either "l" or "i", so both readings are tried.
+const LEET_BASE = { '0': 'o', '3': 'e', '4': 'a', '5': 's', '7': 't', '@': 'a', '$': 's' };
+function leetVariants(s) {
+  let l = '', i = '';
+  for (const ch of s) {
+    if (ch === '1') { l += 'l'; i += 'i'; } else { const c = LEET_BASE[ch] || ch; l += c; i += c; }
+  }
+  return l === i ? [l] : [l, i];
+}
+function normalizeLeetSpeak(s) { return leetVariants(s)[0]; }
+
+// Every reading of a name once look-alike tricks are undone: digits for
+// letters, "rn" drawn to look like "m", "vv" like "w".
+function confusableVariants(s) {
+  const out = new Set();
+  for (const base of [s, s.replace(/rn/g, 'm'), s.replace(/vv/g, 'w'), s.replace(/rn/g, 'm').replace(/vv/g, 'w')]) {
+    for (const v of leetVariants(base)) out.add(v);
+  }
+  return out;
+}
+
+// Edit distance where swapping two neighbouring letters counts as ONE
+// slip ("lemui" for "leumi"), like the typing mistake it imitates.
+function typoDistance(a, b) {
   if (a === b) return 0;
   const m = a.length, n = b.length;
-  if (m === 0) return n;
-  if (n === 0) return m;
-  let prev = new Array(n + 1);
-  let curr = new Array(n + 1);
+  if (!m) return n;
+  if (!n) return m;
+  let prev2 = null, prev = new Array(n + 1), curr = new Array(n + 1);
   for (let j = 0; j <= n; j++) prev[j] = j;
   for (let i = 1; i <= m; i++) {
     curr[0] = i;
     for (let j = 1; j <= n; j++) {
       const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
+      let v = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
+      if (prev2 && i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) v = Math.min(v, prev2[j - 2] + 1);
+      curr[j] = v;
     }
-    [prev, curr] = [curr, prev];
+    const spare = prev2 || new Array(n + 1);
+    prev2 = prev; prev = curr; curr = spare;
   }
   return prev[n];
 }
 
-// Common number/letter substitutions used in typosquatting (paypa1, g00gle,
-// micr0soft, faceb00k). Folded into typosquat detection rather than scored
-// on its own -- a substitution alone means nothing (a brand could
-// legitimately use a digit), it only matters when it makes a domain
-// resemble one *specific* known brand.
-const LEET_SUBSTITUTIONS = { '0': 'o', '1': 'l', '3': 'e', '4': 'a', '5': 's', '7': 't', '@': 'a', '$': 's' };
-
-function normalizeLeetSpeak(s) {
-  let out = '';
-  for (const ch of s) out += LEET_SUBSTITUTIONS[ch] || ch;
-  return out;
+// For short names almost any one-letter change lands on another real word
+// (pango/mango, apple/apply), so only the two slips that keep the same
+// letters count: two neighbours swapped, or one letter doubled / un-doubled.
+function isSwapOrDoubledLetter(a, b) {
+  if (a.length === b.length) return [...a].sort().join('') === [...b].sort().join('');
+  const [short, long] = a.length < b.length ? [a, b] : [b, a];
+  if (long.length - short.length !== 1) return false;
+  for (let i = 0; i < long.length; i++) {
+    if (long.slice(0, i) + long.slice(i + 1) === short && (long[i] === long[i - 1] || long[i] === long[i + 1])) return true;
+  }
+  return false;
 }
 
-// Compares a candidate registrable domain's second-level label against the
-// well-known brands already trusted in KNOWN_SAFE_DOMAINS -- reusing that
-// list rather than maintaining a second one. Only close, real near-misses
-// are reported: a large length gap is rejected outright (cheap and avoids
-// nonsense comparisons), and the exact real spelling is skipped (that's
-// brandImpersonation's job below, e.g. "google.net").
-function detectTyposquat(sld) {
-  if (!sld || sld.length < 4) return null;
-  const normalized = normalizeLeetSpeak(sld);
+// Does `name` look like a near-miss of a well-known name? `name` is a
+// second-level name ("paypa1", "bank-hapoalim") or, when the domain also
+// carries a scam word, one of its hyphen-separated parts.
+// Returns { brand: <official domain>, distance } or null. distance 0 means
+// "identical once the look-alike tricks are undone" (digits, rn/m, a moved
+// hyphen).
+function nearMissOf(name) {
+  const flat = name.replace(/-/g, '');
+  if (flat.length < 4) return null;
   let best = null;
-  for (const officialDomain of KNOWN_SAFE_DOMAINS) {
-    const officialSld = officialDomain.split('.')[0];
-    if (officialSld.length < 4) continue; // e.g. "gov" (from gov.il) -- too short for edit-distance comparison to mean anything
-    if (sld === officialSld) continue; // exact brand name, different TLD -- not a typo
-    if (Math.abs(normalized.length - officialSld.length) > 2) continue;
-    const distance = levenshteinDistance(normalized, officialSld);
-    const maxDistance = officialSld.length <= 6 ? 1 : 2;
-    if (distance <= maxDistance && (!best || distance < best.distance)) {
-      best = { brand: officialDomain, distance };
+  const consider = (official, distance) => { if (!best || distance < best.distance) best = { brand: official, distance }; };
+  const variants = confusableVariants(flat);
+  for (const [target, info] of TYPO_TARGETS) {
+    if (info.raw.has(name)) continue; // the exact official spelling is not a typo (handled as a brand name on another ending)
+    if (flat === target) { consider(info.official, 0); continue; } // only the hyphens differ
+    if (flat === target + 's') continue; // a plain plural ("partners") is its own word
+    if (variants.has(target)) { consider(info.official, 0); continue; }
+    if (Math.abs(flat.length - target.length) > 2) continue;
+    if (target.length <= 4) continue; // too short for anything but the exact tricks above
+    let distance = Infinity;
+    for (const v of leetVariants(flat)) distance = Math.min(distance, typoDistance(v, target));
+    if (target.length === 5 && !STRONG.has(target)) {
+      // A five-letter ordinary word (apple, pango): see isSwapOrDoubledLetter.
+      // A five-letter made-up name (leumi) takes the normal one-slip rule.
+      if (distance === 1 && isSwapOrDoubledLetter(leetVariants(flat)[0], target)) consider(info.official, 1);
+    } else if (distance <= (target.length >= 9 ? 2 : 1)) {
+      consider(info.official, distance);
     }
   }
   return best;
+}
+
+function detectTyposquat(sld, tokens, hasContext) {
+  if (!sld) return null;
+  let best = null;
+  // "paypa1-secure.com": a near-miss in ONE part of the name only counts
+  // next to a scam word -- on its own ("netflex-gym") it is far too often
+  // just somebody's business name.
+  if (hasContext) {
+    for (const t of tokens) {
+      if (t === sld || STRONG.has(t) || WORDS.has(t) || CONTEXT_SET.has(t)) continue;
+      const hit = nearMissOf(t);
+      if (hit && (!best || hit.distance < best.distance)) best = hit;
+    }
+  }
+  return best;
+}
+
+// True when `s` is empty or is nothing but scam/context words run together
+// ("online", "securelogin", "il").
+function isOnlyContextWords(s) {
+  if (!s) return true;
+  const ok = new Array(s.length + 1).fill(false);
+  ok[0] = true;
+  for (let i = 0; i < s.length; i++) {
+    if (!ok[i]) continue;
+    for (let j = i + 1; j <= Math.min(s.length, i + 14); j++) {
+      const piece = s.slice(i, j);
+      if (CONTEXT_SET.has(piece) || GEO_SET.has(piece) || /^\d+$/.test(piece)) ok[j] = true;
+    }
+  }
+  return ok[s.length];
+}
+
+// Is a well-known name being borrowed by a domain that is not that body's?
+//   tokens  hyphen-separated parts of every label left of the public suffix
+//   sld     the registrable second-level name
+// Returns null, or { context, exact }:
+//   context  a scam word sits next to the name ("leumi-LOGIN") -- mimicry,
+//            not coincidence
+//   exact    the name IS the official one, on a different ending
+//            ("isracard.net")
+function detectBrandUse(tokens, sld) {
+  const contextTokens = new Set(tokens.filter((t) => CONTEXT_SET.has(t) || GEO_SET.has(t)));
+  const hasGeo = tokens.some((t) => GEO_SET.has(t));
+  let hit = null;
+  const found = (context, exact) => { hit = { context: (hit && hit.context) || context, exact: (hit && hit.exact) || exact }; };
+
+  // The official name itself, registered on another ending.
+  // (Exact spelling only: a moved hyphen is a near-miss, reported as one.)
+  const officialBrand = OFFICIAL_SLDS.get(sld) || STRONG.get(sld);
+  if (officialBrand && !officialBrand.multiTld && !officialBrand.words.includes(sld)) found(false, true);
+  const ownsManyEndings = !!(officialBrand && officialBrand.multiTld);
+
+  for (const t of tokens) {
+    if (ownsManyEndings && t === sld) continue; // google.de: plausibly the body's own
+    // A distinctive name as a whole part of the domain.
+    if (STRONG.has(t)) { found([...contextTokens].some((c) => c !== t), false); continue; }
+    // An ordinary word that is also a brand: only with the country marker
+    // or two scam words around it ("max-card-update", "gov-il-refund").
+    if (WORDS.has(t)) {
+      const others = [...contextTokens].filter((c) => c !== t);
+      if (hasGeo || others.length >= 2) found(true, false);
+    }
+  }
+  // A distinctive name glued to scam words ("leumionline", "secureisracard").
+  for (const candidate of new Set([...tokens, sld.replace(/-/g, '')])) {
+    for (const kw of STRONG.keys()) {
+      if (kw.length < 5 || candidate.length <= kw.length) continue;
+      const at = candidate.indexOf(kw);
+      if (at === -1) continue;
+      if (isOnlyContextWords(candidate.slice(0, at)) && isOnlyContextWords(candidate.slice(at + kw.length))) found(true, false);
+    }
+  }
+  return hit;
+}
+
+// A domain with no name in it at all, assembled from the story of a scam
+// message plus the country: "il-customs-fee", "parcel-notice-il".
+function looksLikeScamScenario(tokens) {
+  if (!tokens.some((t) => GEO_SET.has(t))) return false;
+  const story = new Set(tokens.filter((t) => SCENARIO_SET.has(t)));
+  const all = new Set(tokens.filter((t) => SCENARIO_SET.has(t) || CONTEXT_SET.has(t)).filter((t) => !GEO_SET.has(t)));
+  return story.size >= 1 && all.size >= 2;
 }
 
 // Catches "paypal.com.evil.com": the real owner (evil.com) is fine on its
@@ -1200,6 +1380,20 @@ function detectBrandSubdomainDecoy(hostname, registrableDomain) {
 // scripts that essentially never appear in this kind of attack in practice.
 const LATIN_LETTER_RE = /[a-z]/i;
 const CONFUSABLE_SCRIPT_RE = /[Ѐ-ӿͰ-Ͽ]/;
+
+// A name written entirely in Hebrew or Arabic letters cannot pass for a
+// Latin brand name -- none of those letters resembles a Latin one -- so an
+// internationalized Hebrew/Arabic domain is just somebody's name in their
+// own language, not a disguise. (Cyrillic and Greek stay suspicious even
+// when unmixed: "аррӏе" is all Cyrillic.)
+const NATIVE_SCRIPT_LABEL_RE = /^[\u0590-\u05FF\u0600-\u06FF0-9-]+$/;
+function isBenignNativeScriptHost(hostnameAscii) {
+  const encoded = hostnameAscii.split('.').filter((l) => l.startsWith('xn--'));
+  if (!encoded.length) return false;
+  return encoded.every((label) => {
+    try { return NATIVE_SCRIPT_LABEL_RE.test(punycode.toUnicode(label)); } catch (e) { return false; }
+  });
+}
 
 function detectHomoglyph(hostnameAscii, parsedPsl) {
   if (hostnameAscii.indexOf('xn--') === -1) return false;
@@ -1307,8 +1501,17 @@ export function heuristicAnalysis(rawUrl, lang) {
   // so callers can reason about signal TYPES without matching localized
   // text -- the handler's .il exemption is an allowlist over these.
   const signals = [];
-  const flag = (key, text) => { signals.push(key); reasons.push(text); };
+  // What each signal added to the score, and its text: lets the handler
+  // carry individual signals over from an earlier redirect hop.
+  const signalScores = {};
+  const signalTexts = {};
   let score = 0;
+  const flag = (key, text, points = 0) => {
+    signals.push(key); reasons.push(text);
+    score += points;
+    signalScores[key] = (signalScores[key] || 0) + points;
+    signalTexts[key] = text;
+  };
   // True only for patterns that have essentially no legitimate use in a
   // link sent to an end user (the userinfo "@" trick, a raw IP address
   // standing in for a domain, or a private/internal address) — strong
@@ -1322,25 +1525,26 @@ export function heuristicAnalysis(rawUrl, lang) {
 
   let url;
   try { url = new URL(toParse); }
-  catch (e) { return { verdict: 'uncertain', reasons: [r.parseFailed], highConfidence: false, score: 2, signals: ['parseFailed'] }; }
+  catch (e) { return { verdict: 'uncertain', reasons: [r.parseFailed], highConfidence: false, score: 2, signals: ['parseFailed'], signalScores: { parseFailed: 2 }, signalTexts: { parseFailed: r.parseFailed } }; }
 
-  const hostname = url.hostname.toLowerCase();
+  const hostname = url.hostname.toLowerCase().replace(/\.+$/, '');
   const full = rawUrl.toLowerCase();
+  let isIp = false;
 
   if (isPrivateHost(hostname)) {
-    score += 6; flag('privateHost', r.privateHost); highConfidence = true;
+    flag('privateHost', r.privateHost, 6); highConfidence = true; isIp = true;
   } else if (isIpLiteral(hostname)) {
     // Decided by actually parsing the host as an IP (IPv4 or bracketed
     // IPv6), not by a prefix regex -- "10.example.co.il" is a domain.
     // Hex/decimal/short IPv4 spellings arrive here already canonicalized
     // by the URL parser.
-    score += 4; flag('publicIp', r.publicIp); highConfidence = true;
+    flag('publicIp', r.publicIp, 4); highConfidence = true; isIp = true;
   } else if (/^(\d{1,3}\.){4}/.test(hostname)) {
     // A domain whose leading labels spell an IPv4 address
     // ("192.168.1.1.evil.com", "127.0.0.1.nip.io") -- made to look like an
     // IP at a glance, or a wildcard-DNS service that maps it to that IP.
     // Suspicious, but it IS a domain, so a score only, never highConfidence.
-    score += 3; flag('ipLikeDomain', r.ipLikeDomain);
+    flag('ipLikeDomain', r.ipLikeDomain, 3);
   }
   // The "@" trick only exists in the authority (userinfo) part:
   // "paypal.com@evil.ru" goes to evil.ru. An "@" in the path or query
@@ -1348,87 +1552,90 @@ export function heuristicAnalysis(rawUrl, lang) {
   // force "danger". The regex also catches an empty userinfo ("http://@x"),
   // which leaves url.username blank.
   if ((url.username || url.password || /^https?:\/\/[^/?#\\]*@/i.test(toParse)) && !/^mailto:/i.test(rawUrl)) {
-    score += 5; flag('atSign', r.atSign); highConfidence = true;
+    flag('atSign', r.atSign, 5); highConfidence = true;
   }
-  if (url.protocol === 'http:') {
-    score += 1; flag('insecureHttp', r.insecureHttp);
-  }
-  if (SHORTENERS.some((s) => hostname === s || hostname.slice(-(s.length + 1)) === ('.' + s))) {
-    score += 2; flag('shortener', r.shortener);
-  }
+  if (url.protocol === 'http:') flag('insecureHttp', r.insecureHttp, 1);
+  if (SHORTENERS.some((s) => hostname === s || hostname.endsWith('.' + s))) flag('shortener', r.shortener, 2);
   let hitTld = false;
-  if (SUSPICIOUS_TLDS.some((t) => hostname.slice(-t.length) === t)) {
-    score += 2; flag('suspiciousTld', r.suspiciousTld); hitTld = true;
-  }
-  if (hostname.indexOf('xn--') !== -1) {
-    score += 3; flag('punycode', r.punycode);
-  }
+  if (SUSPICIOUS_TLDS.some((t) => hostname.endsWith(t))) { flag('suspiciousTld', r.suspiciousTld, 2); hitTld = true; }
+  // Punycode hides which letters a name is really made of -- unless it is
+  // plainly a Hebrew/Arabic name, which cannot imitate a Latin one.
+  const nativeScriptName = isBenignNativeScriptHost(hostname);
+  if (hostname.indexOf('xn--') !== -1 && !nativeScriptName) flag('punycode', r.punycode, 3);
+
   const subdomainParts = hostname.split('.').length - 2;
   // An IP-like prefix's four "labels" are already counted as ipLikeDomain
   // above; don't score the same dots twice as "many subdomains".
-  if (subdomainParts >= 3 && !signals.includes('ipLikeDomain')) {
-    score += 2; flag('manySubdomains', r.manySubdomains);
-  }
-  const isKnownSafe = KNOWN_SAFE_DOMAINS.some((d) => hostname === d || hostname.slice(-(d.length + 1)) === ('.' + d));
+  if (subdomainParts >= 3 && !isIp && !signals.includes('ipLikeDomain')) flag('manySubdomains', r.manySubdomains, 2);
+
+  const parsedPsl = isIp ? null : safePslParse(hostname);
+  const registrableDomain = (parsedPsl && parsedPsl.domain) || hostname;
+  const sld = (parsedPsl && parsedPsl.sld) || hostname.split('.')[0];
+  // Every hyphen-separated part of every label left of the public suffix
+  // ("secure-login.leumi.evil.com" -> secure, login, leumi, evil).
+  const nameLabels = parsedPsl && parsedPsl.tld
+    ? hostname.slice(0, hostname.length - parsedPsl.tld.length - 1).split('.').filter((l) => l && l !== 'www')
+    : [];
+  const tokens = nameLabels.flatMap((l) => l.split('-')).filter(Boolean);
+  const hasContext = tokens.some((t) => CONTEXT_SET.has(t) || GEO_SET.has(t));
+
+  const isKnownSafe = !isIp && isKnownSafeHost(hostname);
   let hitBrand = false;
+  let hitUrgent = false;
   if (isKnownSafe) {
     score -= 3;
-  } else {
-    const hit = BRAND_KEYWORDS.find((b) => hostname.indexOf(b) !== -1);
-    if (hit) {
-      score += 3; flag('brandImpersonation', r.brandImpersonation); hitBrand = true;
+  } else if (!isIp && tokens.length) {
+    // Nothing below applies to a known domain -- there is nothing left to
+    // typo-squat or impersonate once the registrable domain IS the real one.
+    // A near-miss of the WHOLE name ("mizrachi-tefahot", "bank-hapoalim")
+    // is the clearest thing to tell the user, so it is looked for first;
+    // borrowing the exact name comes second; a near-miss in one part of
+    // the name ("paypa1-secure") last.
+    const wholeNameTypo = nearMissOf(sld);
+    let brandUse = detectBrandUse(tokens, sld);
+    if (wholeNameTypo && brandUse && !brandUse.exact) brandUse = null;
+    if (brandUse) {
+      flag('brandImpersonation', r.brandImpersonation, brandUse.context ? 4 : 3); hitBrand = true;
+      // Marker signals (no text, no score): they tell the .il exemption
+      // this is mimicry ("leumi-verify.co.il", "isracard.org.il"), not a
+      // surname or an ordinary word that happens to match.
+      if (brandUse.context) signals.push('brandWithUrgency');
+      if (brandUse.exact) signals.push('brandExactOtherTld');
     }
-  }
-  const kc = URGENT_WORDS.filter((w) => full.indexOf(w) !== -1).length;
-  let hitUrgent = false;
-  if (kc >= 2) {
-    score += 2; flag('urgentWords', r.urgentWords); hitUrgent = true;
-  }
-  // A brand keyword next to even ONE urgent word IN THE DOMAIN NAME
-  // ("leumi-verify.co.il") is the mimicry pattern rather than a
-  // coincidental surname/word match, so it gets its own signal key (no
-  // extra score) for the .il exemption. Hostname only: a real shop's
-  // "/login" or "/account" path is not mimicry.
-  if (hitBrand && URGENT_WORDS.some((w) => hostname.indexOf(w) !== -1)) signals.push('brandWithUrgency');
-
-  // ---------- new signals (see helper functions above for the "why") ----------
-  // Skipped entirely for a known-safe domain -- there is nothing left to
-  // typo-squat or impersonate once the registrable domain IS the real one.
-  let hitEncoding = false, hitEntropy = false, hitComplexity = false;
-  if (!isKnownSafe) {
-    const parsedPsl = safePslParse(hostname);
-    const registrableDomain = (parsedPsl && parsedPsl.domain) || hostname;
-
-    const typosquat = parsedPsl ? detectTyposquat(parsedPsl.sld) : null;
+    // One clear reason beats two overlapping ones.
+    const typosquat = brandUse ? null : (wholeNameTypo || detectTyposquat(sld, tokens, hasContext));
     if (typosquat) {
-      score += typosquat.distance === 0 ? 5 : typosquat.distance === 1 ? 4 : 3;
-      flag('typosquat', r.typosquat(typosquat.brand));
+      flag('typosquat', r.typosquat(typosquat.brand), typosquat.distance === 0 ? 5 : typosquat.distance === 1 ? 4 : 3);
       hitBrand = true;
     }
-
     const decoyBrand = detectBrandSubdomainDecoy(hostname, registrableDomain);
-    if (decoyBrand) {
-      score += 5; flag('subdomainDecoy', r.subdomainDecoy(decoyBrand)); hitBrand = true;
-    }
+    if (decoyBrand) { flag('subdomainDecoy', r.subdomainDecoy(decoyBrand), 5); hitBrand = true; }
+
+    if (!hitBrand && looksLikeScamScenario(tokens)) flag('scamScenario', r.scamScenario, 2);
   }
 
-  if (detectHomoglyph(hostname, safePslParse(hostname))) {
-    score += 4; flag('homoglyph', r.homoglyph);
-  }
+  // Urgent wording counts when the DOMAIN NAME carries some of it. Words
+  // in the path alone ("/account/login") are on every real site.
+  // In the domain name a word counts as a whole part ("secure-login") or
+  // glued to other scam words ("accountverify") -- not as a fragment of
+  // an unrelated word ("accountingtools").
+  const urgentInHost = URGENT_WORDS.filter((w) => tokens.some((t) => t === w || (t.includes(w) && isOnlyContextWords(t)))).length;
+  const urgentTotal = URGENT_WORDS.filter((w) => full.indexOf(w) !== -1).length;
+  if (!isKnownSafe && urgentInHost >= 1 && urgentTotal >= 2) { flag('urgentWords', r.urgentWords, 2); hitUrgent = true; }
+
+  let hitEncoding = false, hitEntropy = false, hitComplexity = false;
+  if (detectHomoglyph(hostname, parsedPsl)) flag('homoglyph', r.homoglyph, 4);
 
   if (countUnnecessaryPercentEncoding(rawUrl) >= 3 || hasDoubleEncoding(rawUrl) || hasEncodedDelimiterInPath(url)) {
-    score += 2; flag('suspiciousEncoding', r.suspiciousEncoding); hitEncoding = true;
+    flag('suspiciousEncoding', r.suspiciousEncoding, 2); hitEncoding = true;
   }
 
-  if (urlComplexityHits(url, rawUrl) >= 2) {
-    score += Math.min(2, urlComplexityHits(url, rawUrl));
-    flag('urlComplexity', r.urlComplexity); hitComplexity = true;
-  }
+  const complexity = urlComplexityHits(url, rawUrl);
+  if (complexity >= 2) { flag('urlComplexity', r.urlComplexity, Math.min(2, complexity)); hitComplexity = true; }
 
-  const sldForEntropy = (safePslParse(hostname) || {}).sld || hostname.split('.')[0];
-  if (looksRandomHostname(sldForEntropy)) {
-    score += 1; flag('randomHostname', r.randomHostname); hitEntropy = true;
-  }
+  // (A punycode label is an encoding, not a name: its letters say nothing
+  // about randomness.)
+  if (!isIp && !sld.startsWith('xn--') && looksRandomHostname(sld)) { flag('randomHostname', r.randomHostname, 1); hitEntropy = true; }
 
   // ---------- signal-combination bonuses ----------
   //
@@ -1450,19 +1657,14 @@ export function heuristicAnalysis(rawUrl, lang) {
   if (hitBrand && hitEntropy && hitComplexity) comboBonus += 2;
   // Brand mimicry hidden behind obfuscated encoding.
   if (hitBrand && hitEncoding) comboBonus += 1;
-  if (comboBonus > 0) {
-    score += Math.min(3, comboBonus);
-    flag('comboBonus', r.comboBonus);
-  }
+  if (comboBonus > 0) flag('comboBonus', r.comboBonus, Math.min(3, comboBonus));
 
   const verdict = score >= 5 ? 'unsafe' : (score >= 2 ? 'uncertain' : 'safe');
   if (!reasons.length) reasons.push(r.noneFound);
-  // `score` is exposed (in addition to the pre-computed `verdict`) purely
-  // so the handler can add the infrastructure layer's own score to it and
+  // `score` is exposed (in addition to the pre-computed `verdict`) so the
+  // handler can add the infrastructure layer's own score to it and
   // re-derive a verdict from the combined total using these exact same
   // thresholds — see infrastructureAnalysis() in api/_lib/infrastructure.js
-  // and its caller below. Existing callers that only use `verdict` /
-  // `reasons` / `highConfidence` (including every existing test) are
-  // completely unaffected by this addition.
-  return { verdict, reasons, highConfidence, score, signals };
+  // and its caller.
+  return { verdict, reasons, highConfidence, score, signals, signalScores, signalTexts, registrableDomain };
 }

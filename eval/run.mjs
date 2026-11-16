@@ -21,6 +21,7 @@ import { __setRedisForTests } from '../api/_lib/redis.js';
 import { __setDnsForTests, __setRdapFetchForTests } from '../api/_lib/infrastructure.js';
 import { LEGIT } from './data/legit.mjs';
 import { PHISHING } from './data/phishing.mjs';
+import { HOLDOUT_LEGIT } from './data/holdout-legit.mjs';
 
 const args = new Set(process.argv.slice(2));
 const thresholds = JSON.parse(readFileSync(fileURLToPath(new URL('./thresholds.json', import.meta.url)), 'utf8'));
@@ -76,7 +77,7 @@ async function runCase(c) {
 }
 
 const isIsraeli = (c) => {
-  if (c.category.startsWith('il-')) return true;
+  if (c.category.startsWith('il-') || c.category === 'holdout-il') return true;
   try {
     const last = new URL(c.chain && c.chain.length ? c.chain[c.chain.length - 1] : c.url).hostname;
     return /\.il$/.test(last) || /\.xn--4dbrk0ce$/.test(last);
@@ -91,7 +92,7 @@ async function main() {
   const realError = console.error;
   console.error = () => {}; // the handler logs expected SSRF refusals etc.
 
-  const cases = [...toCases(LEGIT, 'legit'), ...toCases(PHISHING, 'phish')];
+  const cases = [...toCases(LEGIT, 'legit'), ...toCases(HOLDOUT_LEGIT, 'legit').map((c) => ({ ...c, holdout: true })), ...toCases(PHISHING, 'phish')];
   for (const c of cases) {
     const r = await runCase(c);
     c.status = r.status === 'uncertain' ? 'uncertain' : r.status; // safe | uncertain | danger | unknown
@@ -103,6 +104,7 @@ async function main() {
 
   const count = (list, pred) => list.filter(pred).length;
   const legit = cases.filter((c) => c.label === 'legit');
+  const holdout = legit.filter((c) => c.holdout);
   const phish = cases.filter((c) => c.label === 'phish');
   const legitIl = legit.filter(isIsraeli);
   const flagged = (c) => c.status !== 'safe';
@@ -124,9 +126,10 @@ async function main() {
   }
 
   const summary = {
-    cases: { legit: legit.length, legitIsraeli: legitIl.length, phish: phish.length },
+    cases: { legit: legit.length, legitIsraeli: legitIl.length, legitHoldout: holdout.length, phish: phish.length },
     falsePositiveRate: rate(fp, legit.length),
     falsePositiveRateIsraeli: rate(count(legitIl, flagged), legitIl.length),
+    falsePositiveRateHoldout: rate(count(holdout, flagged), holdout.length),
     legitMarkedDanger: confusion.legit.danger,
     recall: rate(tp, phish.length),
     precision: rate(tp, tp + fp),
@@ -139,6 +142,7 @@ async function main() {
   const gate = (name, ok, text) => { if (!ok) failures.push(name + ': ' + text); };
   gate('falsePositiveRate', summary.falsePositiveRate <= thresholds.maxFalsePositiveRate, `${pct(summary.falsePositiveRate)} > ${pct(thresholds.maxFalsePositiveRate)}`);
   gate('falsePositiveRateIsraeli', summary.falsePositiveRateIsraeli <= thresholds.maxFalsePositiveRateIsraeli, `${pct(summary.falsePositiveRateIsraeli)} > ${pct(thresholds.maxFalsePositiveRateIsraeli)}`);
+  gate('falsePositiveRateHoldout', summary.falsePositiveRateHoldout <= thresholds.maxFalsePositiveRateHoldout, `${pct(summary.falsePositiveRateHoldout)} > ${pct(thresholds.maxFalsePositiveRateHoldout)}`);
   gate('legitMarkedDanger', summary.legitMarkedDanger <= thresholds.maxLegitMarkedDanger, `${summary.legitMarkedDanger} > ${thresholds.maxLegitMarkedDanger}`);
   gate('recall', summary.recall >= thresholds.minRecall, `${pct(summary.recall)} < ${pct(thresholds.minRecall)}`);
   gate('hardRuleMisses', summary.hardRuleMisses <= thresholds.maxHardRuleMisses, `${summary.hardRuleMisses} > ${thresholds.maxHardRuleMisses}`);
@@ -157,7 +161,7 @@ function pad(s, n) { s = String(s); return s.length >= n ? s : s + ' '.repeat(n 
 function padL(s, n) { s = String(s); return s.length >= n ? s : ' '.repeat(n - s.length) + s; }
 
 function print(s, cases) {
-  console.log(`Evaluation: ${s.cases.legit} legitimate links (${s.cases.legitIsraeli} Israeli), ${s.cases.phish} phishing patterns\n`);
+  console.log(`Evaluation: ${s.cases.legit} legitimate links (${s.cases.legitIsraeli} Israeli, ${s.cases.legitHoldout} held out from tuning), ${s.cases.phish} phishing patterns\n`);
   console.log('Confusion table (rows = truth, columns = answer)');
   console.log(pad('', 12) + padL('safe', 8) + padL('uncertain', 11) + padL('danger', 8) + padL('other', 7));
   for (const k of ['legit', 'phish']) {
@@ -167,6 +171,7 @@ function print(s, cases) {
   console.log('\nHeadline numbers');
   console.log(`  False-positive rate, all legitimate      ${pct(s.falsePositiveRate)}`);
   console.log(`  False-positive rate, Israeli legitimate  ${pct(s.falsePositiveRateIsraeli)}`);
+  console.log(`  False-positive rate, held-out legitimate ${pct(s.falsePositiveRateHoldout)}`);
   console.log(`  Legitimate links marked DANGER           ${s.legitMarkedDanger}`);
   console.log(`  Recall (phishing not answered "safe")    ${pct(s.recall)}`);
   console.log(`  Precision (of everything flagged)        ${pct(s.precision)}`);
