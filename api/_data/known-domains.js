@@ -23,6 +23,13 @@
 //     multiTld the body really does own its name on many endings
 //              (google.de, amazon.nl): the bare name on an unlisted ending
 //              is not flagged
+//     claimDomains  extra sites a message from this body may legitimately
+//              link to without being "its own" for look-alike purposes
+//              (government bodies -> gov.il). Together with `domains` and
+//              `official`, this is where a message claiming to come from
+//              the body may lead without being called a forgery -- so a
+//              missing real domain here means a false "danger": verify
+//              each body's domains before adding it.
 //     words    ordinary words, surnames or very short names ("max", "cal",
 //              "discount", "apple", "mizrahi"). These only count next to a
 //              scam word such as "login" or "refund" -- otherwise
@@ -34,7 +41,7 @@
 export const BRANDS = [
   // ---- Israeli banks ----
   { id: 'bank-leumi', domains: ['leumi.co.il', 'bankleumi.co.il'], strong: ['leumi', 'bankleumi'], words: [] },
-  { id: 'bank-hapoalim', domains: ['bankhapoalim.co.il', 'hapoalim.co.il', 'bankhapoalim.com'], strong: ['hapoalim', 'bankhapoalim', 'poalim'], words: [] },
+  { id: 'bank-hapoalim', claimDomains: ['bitpay.co.il'], domains: ['bankhapoalim.co.il', 'hapoalim.co.il', 'bankhapoalim.com'], strong: ['hapoalim', 'bankhapoalim', 'poalim'], words: [] },
   { id: 'bank-discount', noTypo: ['mercantile'], domains: ['discountbank.co.il', 'telebank.co.il', 'mercantile.co.il'], strong: ['discountbank', 'telebank'], words: ['discount', 'mercantile'] },
   { id: 'bank-mizrahi-tefahot', domains: ['mizrahi-tefahot.co.il'], strong: ['mizrahitefahot', 'tefahot'], words: ['mizrahi', 'mizrachi'] },
   { id: 'bank-fibi', noTypo: ['massad'], domains: ['fibi.co.il', 'bankotsar.co.il', 'bankmassad.co.il', 'massad.co.il', 'ubank.co.il'], strong: ['habeinleumi'], words: ['fibi', 'beinleumi'] },
@@ -50,20 +57,20 @@ export const BRANDS = [
   { id: 'max', domains: ['max.co.il'], strong: ['leumicard'], words: ['max'] },
   { id: 'amex-il', domains: ['americanexpress.co.il', 'americanexpress.com'], strong: ['americanexpress'], words: ['amex'] },
   { id: 'diners', noTypo: ['diners'], domains: ['diners.co.il'], strong: [], words: ['diners'] },
-  { id: 'bit', domains: ['bitpay.co.il'], strong: [], words: ['bit', 'bitpay'] },
+  { id: 'bit', claimDomains: ['bankhapoalim.co.il'], domains: ['bitpay.co.il'], strong: [], words: ['bit', 'bitpay'] },
   { id: 'paybox', domains: ['payboxapp.com', 'payboxapp.page.link'], strong: ['paybox', 'payboxapp'], words: [] },
   { id: 'paypal', domains: ['paypal.com', 'paypal.me'], strong: ['paypal'], words: [] },
   { id: 'visa', noTypo: ['visa'], domains: ['visa.com', 'visa.co.il'], strong: [], words: ['visa'] },
   { id: 'mastercard', domains: ['mastercard.com', 'mastercard.co.il'], strong: ['mastercard'], words: [] },
 
   // ---- Government & public bodies ----
-  { id: 'israel-government', domains: ['gov.il'], strong: ['govil'], words: ['gov', 'memshala'] },
-  { id: 'tax-authority', official: 'gov.il', domains: [], strong: ['misim', 'hamisim', 'rashuthamisim'], words: ['taxes', 'shaam'] },
-  { id: 'bituach-leumi', official: 'btl.gov.il', domains: [], strong: ['bituachleumi'], words: ['btl', 'bituach'] },
-  { id: 'transport-ministry', official: 'gov.il', domains: [], strong: ['hatahbura', 'misradhatahbura'], words: ['rishuy'] },
-  { id: 'israel-police', official: 'police.gov.il', domains: [], strong: ['mishtara'], words: ['police'] },
-  { id: 'home-front-command', noTypo: ['oref'], domains: ['oref.org.il'], strong: ['pikudhaoref'], words: ['oref'] },
-  { id: 'idf', domains: ['idf.il'], strong: [], words: ['idf', 'tzahal'] },
+  { id: 'israel-government', claimDomains: ['gov.il'], domains: ['gov.il'], strong: ['govil'], words: ['gov', 'memshala'] },
+  { id: 'tax-authority', claimDomains: ['gov.il'], official: 'gov.il', domains: [], strong: ['misim', 'hamisim', 'rashuthamisim'], words: ['taxes', 'shaam'] },
+  { id: 'bituach-leumi', claimDomains: ['gov.il'], official: 'btl.gov.il', domains: [], strong: ['bituachleumi'], words: ['btl', 'bituach'] },
+  { id: 'transport-ministry', claimDomains: ['gov.il'], official: 'gov.il', domains: [], strong: ['hatahbura', 'misradhatahbura'], words: ['rishuy'] },
+  { id: 'israel-police', claimDomains: ['gov.il'], official: 'police.gov.il', domains: [], strong: ['mishtara'], words: ['police'] },
+  { id: 'home-front-command', claimDomains: ['gov.il'], noTypo: ['oref'], domains: ['oref.org.il'], strong: ['pikudhaoref'], words: ['oref'] },
+  { id: 'idf', claimDomains: ['gov.il'], domains: ['idf.il'], strong: [], words: ['idf', 'tzahal'] },
 
   // ---- Post & shipping ----
   { id: 'israel-post', noTypo: ['mypost'], domains: ['israelpost.co.il'], strong: ['israelpost', 'doarisrael', 'mypost'], words: ['doar', 'post'] },
@@ -168,6 +175,15 @@ export const OTHER_KNOWN_DOMAINS = [
   'wikipedia.org', 'maps.app.goo.gl', 'zoom.us', 'github.com', 'dropbox.com', 'wise.com',
   'revolut.com', 'uber.com', 'discord.com', 'reddit.com', 'steampowered.com', 'chatgpt.com',
   'openai.com', 'bitpay.com', 'hotmail.com',
+];
+
+// Hosts on well-known domains where ANYONE can publish a page or a form
+// (a Google Form, a shared document). A message claiming to come from a
+// bank that leads here is treated like a link to an unknown site: no body
+// collects your details through a public form.
+export const USER_CONTENT_HOSTS = [
+  'docs.google.com', 'forms.gle', 'drive.google.com', 'sites.google.com', 'script.google.com',
+  'forms.office.com', 'onedrive.live.com', '1drv.ms', 'sharepoint.com', 'dropbox.com', 'github.com',
 ];
 
 // Link shorteners: what they hide is the point, so a link that ENDS on one

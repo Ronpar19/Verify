@@ -35,7 +35,7 @@ import { recordCheck } from './_lib/stats.js';
 import { infrastructureAnalysis, isNonPublicIp } from './_lib/infrastructure.js';
 import {
   BRANDS, TRUSTED_SUFFIXES, OTHER_KNOWN_DOMAINS, SHORTENERS, SUSPICIOUS_TLDS,
-  CONTEXT_WORDS, SCENARIO_WORDS, GEO_WORDS,
+  CONTEXT_WORDS, SCENARIO_WORDS, GEO_WORDS, USER_CONTENT_HOSTS,
 } from './_data/known-domains.js';
 
 const THREAT_TYPES = ['MALWARE', 'SOCIAL_ENGINEERING', 'UNWANTED_SOFTWARE'];
@@ -116,6 +116,7 @@ const MESSAGES = {
     bothSafeSuffix: ', וגם מבנה הקישור עצמו לא מעורר חשד',
     uncertainPrefix: 'לא נמצא ברשימות הידועות של Google, אבל כדאי להיזהר: ',
     heuristicDangerPrefix: 'לא נמצא (עדיין) ברשימות הידועות של Google, אך מבנה הקישור תואם דפוס הונאה מוכר וודאי: ',
+    entityMismatchPrefix: 'ההודעה מתחזה לגוף מוכר: ',
     heuristicReasons: {
       privateHost: 'הכתובת מפנה לרשת פרטית/פנימית — חריג מאוד עבור קישור שנשלח אליך',
       publicIp: 'הכתובת מפנה לכתובת IP ציבורית ולא לשם דומיין רגיל',
@@ -139,6 +140,8 @@ const MESSAGES = {
       originalLinkPrefix: 'בכתובת שקיבלתם, לפני שהיא מפנה הלאה: ',
       invalidHost: 'זה לא נראה כמו כתובת אתר תקינה, ולכן לא ניתן לבדוק אותה',
       tooLong: 'הכתובת ארוכה באופן חריג מכדי לבדוק אותה במלואה',
+      entityMismatch: 'ההודעה מתיימרת להיות מגוף מוכר, אבל הקישור לא מוביל לאתר הרשמי שלו',
+      messageWording: 'נוסח ההודעה עצמה אופייני להודעות הונאה',
       comboBonus: 'השילוב של כמה סימנים חשודים יחד תואם דפוס הונאה מוכר',
       noneFound: 'לא זוהו סימנים חשודים בולטים במבנה הקישור',
       parseFailed: 'לא הצלחנו לנתח את מבנה הכתובת',
@@ -160,6 +163,7 @@ const MESSAGES = {
     bothSafeSuffix: ", and the link's own structure is not suspicious either",
     uncertainPrefix: "Not found on Google's known lists, but caution is advised: ",
     heuristicDangerPrefix: "Not found on Google's known lists yet, but the link's structure matches a well-known, high-confidence scam pattern: ",
+    entityMismatchPrefix: 'The message impersonates a well-known organisation: ',
     heuristicReasons: {
       privateHost: 'The address points to a private/internal network — highly unusual for a link sent to you',
       publicIp: 'The address points to a public IP address rather than a normal domain name',
@@ -183,6 +187,8 @@ const MESSAGES = {
       originalLinkPrefix: 'In the address you received, before it forwards elsewhere: ',
       invalidHost: 'This does not look like a valid web address, so it could not be checked',
       tooLong: 'The address is unusually long, too long to check in full',
+      entityMismatch: 'The message claims to come from a well-known organisation, but the link does not lead to its official website',
+      messageWording: 'The wording of the message itself is typical of scam messages',
       comboBonus: 'The combination of several suspicious signals together matches a known phishing pattern',
       noneFound: "No notable suspicious signs were detected in the link's structure",
       parseFailed: 'We could not parse the structure of this address',
@@ -204,6 +210,7 @@ const MESSAGES = {
     bothSafeSuffix: ', и структура самой ссылки также не вызывает подозрений',
     uncertainPrefix: 'Не найдено в известных списках Google, но стоит быть осторожнее: ',
     heuristicDangerPrefix: 'Пока не найдено в известных списках Google, но структура ссылки соответствует хорошо известной, высокодостоверной схеме мошенничества: ',
+    entityMismatchPrefix: 'Сообщение выдаёт себя за известную организацию: ',
     heuristicReasons: {
       privateHost: 'Адрес указывает на частную/внутреннюю сеть — крайне необычно для присланной вам ссылки',
       publicIp: 'Адрес указывает на публичный IP-адрес, а не на обычное доменное имя',
@@ -227,6 +234,8 @@ const MESSAGES = {
       originalLinkPrefix: 'В адресе, который вы получили, до перенаправления: ',
       invalidHost: 'Это не похоже на правильный адрес сайта, поэтому его нельзя проверить',
       tooLong: 'Адрес необычно длинный — слишком длинный, чтобы проверить его полностью',
+      entityMismatch: 'Сообщение выдаёт себя за известную организацию, но ссылка ведёт не на её официальный сайт',
+      messageWording: 'Сам текст сообщения типичен для мошеннических сообщений',
       comboBonus: 'Сочетание нескольких подозрительных признаков вместе соответствует известной схеме фишинга',
       noneFound: 'Явных подозрительных признаков в структуре ссылки не обнаружено',
       parseFailed: 'Не удалось разобрать структуру этого адреса',
@@ -248,6 +257,7 @@ const MESSAGES = {
     bothSafeSuffix: ", et la structure du lien lui-même n'est pas non plus suspecte",
     uncertainPrefix: "Introuvable dans les listes connues de Google, mais la prudence est conseillée : ",
     heuristicDangerPrefix: "Introuvable pour l'instant dans les listes connues de Google, mais la structure du lien correspond à un schéma d'arnaque bien connu et à haute confiance : ",
+    entityMismatchPrefix: "Le message usurpe l'identité d'un organisme connu : ",
     heuristicReasons: {
       privateHost: "L'adresse pointe vers un réseau privé/interne — très inhabituel pour un lien qui vous a été envoyé",
       publicIp: "L'adresse pointe vers une adresse IP publique plutôt que vers un nom de domaine normal",
@@ -271,6 +281,8 @@ const MESSAGES = {
       originalLinkPrefix: "Dans l'adresse que vous avez reçue, avant sa redirection : ",
       invalidHost: "Cela ne ressemble pas à une adresse web valide, elle n'a donc pas pu être vérifiée",
       tooLong: "L'adresse est anormalement longue, trop pour être vérifiée en entier",
+      entityMismatch: "Le message prétend venir d'un organisme connu, mais le lien ne mène pas à son site officiel",
+      messageWording: "La formulation du message lui-même est typique des messages frauduleux",
       comboBonus: 'La combinaison de plusieurs signes suspects correspond à un schéma de phishing connu',
       noneFound: "Aucun signe suspect notable n'a été détecté dans la structure du lien",
       parseFailed: "Nous n'avons pas pu analyser la structure de cette adresse",
@@ -292,6 +304,7 @@ const MESSAGES = {
     bothSafeSuffix: '، كما أن بنية الرابط نفسها لا تثير الشبهة',
     uncertainPrefix: 'لم يُعثر عليه في قوائم Google المعروفة، لكن يُنصح بالحذر: ',
     heuristicDangerPrefix: 'لم يُعثر عليه بعد في قوائم Google المعروفة، لكن بنية الرابط تطابق نمط احتيال معروف وعالي الموثوقية: ',
+    entityMismatchPrefix: 'الرسالة تنتحل صفة جهة معروفة: ',
     heuristicReasons: {
       privateHost: 'يشير العنوان إلى شبكة خاصة/داخلية — وهذا أمر غير معتاد جدًا لرابط أُرسل إليك',
       publicIp: 'يشير العنوان إلى عنوان IP عام بدلاً من اسم نطاق عادي',
@@ -315,6 +328,8 @@ const MESSAGES = {
       originalLinkPrefix: 'في العنوان الذي وصلك، قبل إعادة التوجيه: ',
       invalidHost: 'لا يبدو هذا عنوان موقع صالحًا، لذلك تعذّر فحصه',
       tooLong: 'العنوان طويل بشكل غير معتاد، أطول من أن يُفحص بالكامل',
+      entityMismatch: 'تدّعي الرسالة أنها من جهة معروفة، لكن الرابط لا يؤدي إلى موقعها الرسمي',
+      messageWording: 'صياغة الرسالة نفسها نموذجية لرسائل الاحتيال',
       comboBonus: 'يتطابق مزيج عدة علامات مشبوهة معًا مع نمط تصيّد احتيالي معروف',
       noneFound: 'لم يتم رصد علامات مشبوهة واضحة في بنية الرابط',
       parseFailed: 'تعذّر تحليل بنية هذا العنوان',
@@ -326,6 +341,66 @@ const MESSAGES = {
 // api/_data/known-domains.js (data, maintained separately from this logic).
 // Everything below is derived from it once, at module load.
 const KNOWN_SAFE_DOMAINS = [...new Set([...TRUSTED_SUFFIXES, ...BRANDS.flatMap((b) => b.domains), ...OTHER_KNOWN_DOMAINS])];
+// ---------- what the app read in the MESSAGE (on the device) ----------
+//
+// The app analyses a pasted/shared message on the phone and sends only
+// identifiers: which bodies the message speaks in the name of
+// (`claimedEntities`, ids from BRANDS) and which scam patterns its wording
+// has (`messageFlags`). Never the text. Anything not on these lists is
+// ignored, so the fields can't carry free text into logs or answers.
+const BRAND_BY_ID = new Map(BRANDS.map((b) => [b.id, b]));
+const MESSAGE_FLAGS = new Set(['accountThreat', 'paymentDetails', 'otpRequest', 'parcelHeld', 'refund', 'debtOrFine', 'prize', 'urgency']);
+const MAX_CLAIMED_ENTITIES = 3;
+// Message wording raises the score by at most this much: enough for "be
+// careful" on a link with nothing else against it, never "danger" alone.
+const MESSAGE_FLAGS_MAX_SCORE = 2;
+// A strong pattern (a fee for a parcel, a request for a code) is worth 2
+// on its own; general urgency only 1.
+const WEAK_MESSAGE_FLAGS = new Set(['urgency']);
+function messageFlagScore(flags) {
+  return Math.min(MESSAGE_FLAGS_MAX_SCORE, flags.reduce((sum, f) => sum + (WEAK_MESSAGE_FLAGS.has(f) ? 1 : 2), 0));
+}
+
+function readMessageContext(body) {
+  const ids = Array.isArray(body.claimedEntities) ? body.claimedEntities
+    : typeof body.claimedEntity === 'string' ? [body.claimedEntity] : [];
+  const brands = [...new Set(ids.filter((x) => typeof x === 'string'))]
+    .map((x) => BRAND_BY_ID.get(x)).filter(Boolean).slice(0, MAX_CLAIMED_ENTITIES);
+  const flags = Array.isArray(body.messageFlags)
+    ? [...new Set(body.messageFlags.filter((x) => typeof x === 'string' && MESSAGE_FLAGS.has(x)))]
+    : [];
+  return { brands, flags };
+}
+
+// Where a message from these bodies may lead.
+function claimedSites(brands) {
+  return brands.flatMap((b) => [...b.domains, ...(b.claimDomains || []), ...(b.official ? [b.official] : [])]);
+}
+
+// The message claims to come from a body; does the link lead there?
+//   null        no claim, or the link (start or destination) is the body's own
+//   'danger'    the destination is a site that is NOT the body's and not
+//               any other known legitimate site -- the forgery pattern
+//               (owner's decision: decisive on its own)
+//               A public form or shared document on a big platform
+//               (USER_CONTENT_HOSTS) counts as unknown, i.e. 'danger'.
+//   'uncertain' the destination is someone else's KNOWN site (a news
+//               site, a YouTube video), or where it leads could not be
+//               confirmed (redirects cut short, stopped at a shortener)
+function entityMismatch(brands, chain) {
+  if (!brands.length) return null;
+  const sites = claimedSites(brands);
+  const owned = (h) => !!h && sites.some((d) => h === d || h.endsWith('.' + d));
+  const startHost = safeHostname(chain.visited && chain.visited[0]);
+  const finalHost = safeHostname(chain.url);
+  if (owned(startHost) || owned(finalHost)) return null;
+  if (!chain.complete || !finalHost) return 'uncertain';
+  if (SHORTENERS.some((x) => finalHost === x || finalHost.endsWith('.' + x))) return 'uncertain';
+  if (USER_CONTENT_HOSTS.some((x) => finalHost === x || finalHost.endsWith('.' + x))) return 'danger';
+  if (isKnownSafeHost(finalHost)) return 'uncertain';
+  return 'danger';
+}
+
 const URGENT_WORDS = ['verify','confirm','update','secure','suspended','urgent','login','password','account'];
 const CONTEXT_SET = new Set(CONTEXT_WORDS);
 const SCENARIO_SET = new Set(SCENARIO_WORDS);
@@ -426,7 +501,10 @@ function isAuthorized(req) {
 // and how often Web Risk was down) and a machine-readable `webRisk` field
 // in the response ('ok' | 'unavailable'), which the post-deploy smoke test
 // reads instead of matching localized text.
-async function sendVerdict(req, res, status, details, webRisk) {
+// `extra` (optional) adds structured fields for the app: `reasons` (the
+// link's own findings, one sentence each) and `entityMismatch` (the id of
+// the body the message claimed to be from, when the link isn't theirs).
+async function sendVerdict(req, res, status, details, webRisk, extra) {
   try {
     await recordCheck(getRedis(), { status, ip: clientIp(req), webRisk });
   } catch (err) {
@@ -434,6 +512,7 @@ async function sendVerdict(req, res, status, details, webRisk) {
   }
   const body = { status, details };
   if (webRisk) body.webRisk = webRisk.unavailable ? 'unavailable' : 'ok';
+  if (extra) Object.assign(body, extra);
   return res.status(200).json(body);
 }
 
@@ -462,6 +541,7 @@ export default async function handler(req, res) {
   }
 
   const { link, lang: rawLang } = req.body || {};
+  const message = readMessageContext(req.body || {});
   const lang = resolveLang(rawLang);
   const m = MESSAGES[lang];
 
@@ -616,9 +696,19 @@ export default async function handler(req, res) {
   // (per design) -- the infrastructure layer's score is added to the
   // heuristic's own score and the verdict is re-derived using the exact
   // same thresholds heuristicAnalysis() itself uses internally.
-  const combinedScore = heuristic.score + infra.score;
+  let combinedScore = heuristic.score + infra.score;
   const combinedReasons = [...heuristic.reasons, ...infra.reasons];
+  // Text about the message itself (shown in `details`; the app shows its
+  // own, more specific sentences for these, so they stay out of `reasons`).
+  const messageReasons = [];
+  if (message.flags.length) {
+    combinedScore += messageFlagScore(message.flags);
+    messageReasons.push(m.heuristicReasons.messageWording);
+  }
+  const mismatch = entityMismatch(message.brands, chain);
+  if (mismatch) messageReasons.unshift(m.heuristicReasons.entityMismatch);
   let combinedVerdict = combinedScore >= 5 ? 'unsafe' : (combinedScore >= 2 ? 'uncertain' : 'safe');
+  if (mismatch === 'uncertain' && combinedVerdict === 'safe') combinedVerdict = 'uncertain';
   // We stopped following redirects before reaching the destination, so
   // what we checked may be a clean-looking stepping stone. Never "safe".
   if (!chain.complete) {
@@ -626,6 +716,20 @@ export default async function handler(req, res) {
     if (noneFoundAt !== -1) combinedReasons.splice(noneFoundAt, 1);
     combinedReasons.push(m.heuristicReasons.redirectIncomplete);
     if (combinedVerdict === 'safe') combinedVerdict = 'uncertain';
+  }
+
+  const linkReasons = combinedReasons.filter((x) => x !== m.heuristicReasons.noneFound || !messageReasons.length);
+  const allReasons = [...messageReasons, ...linkReasons];
+  // ("No suspicious signs in the link" is left out when the message itself
+  // already explains a warning -- next to a red verdict it only confuses.)
+  const extra = { reasons: linkReasons.slice() };
+  if (mismatch) extra.entityMismatch = message.brands[0].id;
+
+  // A message that claims to come from a body, with a link that leads to
+  // somewhere unknown that isn't theirs: decided here, like the other
+  // hard rules (only Web Risk's own "danger", handled above, comes first).
+  if (mismatch === 'danger') {
+    return sendVerdict(req, res, 'danger', m.entityMismatchPrefix + allReasons.join('; '), webRiskMeta, extra);
   }
 
   // The hard rules decide on their own, whatever the score says: a raw-IP
@@ -642,12 +746,12 @@ export default async function handler(req, res) {
     // ordinary structure).
     const statusMap = { safe: 'uncertain', uncertain: 'uncertain', unsafe: 'danger' };
     if (heuristic.highConfidence) combinedVerdict = 'unsafe';
-    return sendVerdict(req, res, statusMap[combinedVerdict], m.heuristicOnlyPrefix + combinedReasons.join('; '), webRiskMeta);
+    return sendVerdict(req, res, statusMap[combinedVerdict], m.heuristicOnlyPrefix + allReasons.join('; '), webRiskMeta, extra);
   }
 
   if (combinedVerdict === 'safe') {
     // All signals agree.
-    return sendVerdict(req, res, 'safe', webRiskResult.details + m.bothSafeSuffix, webRiskMeta);
+    return sendVerdict(req, res, 'safe', webRiskResult.details + m.bothSafeSuffix, webRiskMeta, extra);
   }
 
   // Web Risk found nothing on its lists yet, but the heuristic caught a
@@ -663,7 +767,7 @@ export default async function handler(req, res) {
   // internal IP found only there stays a strong score contribution, never
   // an automatic "danger".
   if (heuristic.highConfidence) {
-    return sendVerdict(req, res, 'danger', m.heuristicDangerPrefix + combinedReasons.join('; '), webRiskMeta);
+    return sendVerdict(req, res, 'danger', m.heuristicDangerPrefix + allReasons.join('; '), webRiskMeta, extra);
   }
 
   // Israeli (.il) sites: the local heuristic runs exactly the same as for
@@ -689,16 +793,19 @@ export default async function handler(req, res) {
     isIsraeliDomain(safeHostname(finalUrl)) &&
     chain.complete &&
     heuristic.signals.every((sig) => IL_WEAK_SIGNALS.has(sig)) &&
-    infra.reasons.length === 0
+    infra.reasons.length === 0 &&
+    // What the message itself says is not URL noise: scam wording, or a
+    // claim to come from a body whose site this isn't, keeps "uncertain".
+    !message.flags.length && !mismatch
   ) {
-    return sendVerdict(req, res, 'safe', webRiskResult.details, webRiskMeta);
+    return sendVerdict(req, res, 'safe', webRiskResult.details, webRiskMeta, extra);
   }
 
   // Everything else: Web Risk found nothing on its lists, and neither the
   // URL's own structure nor its infrastructure is a smoking gun — don't
   // hand out false confidence, but don't cry "danger" on a legitimate
   // site either.
-  return sendVerdict(req, res, 'uncertain', m.uncertainPrefix + combinedReasons.join('; '), webRiskMeta);
+  return sendVerdict(req, res, 'uncertain', m.uncertainPrefix + allReasons.join('; '), webRiskMeta, extra);
 }
 
 // ---------- cloaking: what the link in the message itself looked like ----------

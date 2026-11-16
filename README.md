@@ -57,8 +57,9 @@ project is interesting* below for why.)
   (IPv4 and IPv6), under a 10-second budget for the whole chain
 - Per-IP rate limiting, shared-secret request auth, and privacy-
   conscious usage stats, all backed by Upstash Redis
-- 1514 automated tests across three suites (474 for backend detection
-  logic + API behavior, 15 for URL extraction, 1025 for translations),
+- 1908 automated tests across four suites (508 for backend detection
+  logic + API behavior, 15 for URL extraction, 1213 for translations,
+  172 for on-device message analysis),
   zero live network calls required to run any of them
 
 ## Why this project is interesting (the engineering decisions)
@@ -140,6 +141,34 @@ blindly would give users false confidence.
 explicitly forbids commercial use and is officially deprecated. Web
 Risk is the supported, commercially-usable successor, chosen
 deliberately for a project meant to be maintained long-term.
+
+## Reading the whole message, not just the link
+
+Paste or share a whole SMS and the app reads it **on the phone**
+(`mobile/messageAnalysis.js`): which well-known body it claims to come
+from (a bank, Israel Post, the Tax Authority, Bituach Leumi, ...) and
+whether its wording follows a scam script (account about to be blocked,
+a fee for a held parcel, a refund, a request for a code or card details).
+Only those identifiers go to the server with each link — never the text.
+
+If a message claims to come from a body and its link leads to a site that
+is not that body's (and not any other known legitimate site), the answer
+is **"danger"**, with the reason spelled out: *"The message is written as
+if it came from Bank Hapoalim, but the link does not lead to Bank
+Hapoalim's website."* Scam wording alone only raises the score. To keep
+that rule from firing on ordinary messages, a body only counts as
+"claimed" when the message speaks in its name — a scam pattern, or the
+body's name opening the message with a request to act; payment apps and
+global brands ("pay with Bit", "I ordered on Amazon") need a scam pattern.
+
+`npm run eval` also runs a message-level set (`eval/messages.mjs`):
+
+| | Link only | With message analysis |
+|---|---|---|
+| Scam messages caught | 5.3% | 100% |
+| Scam messages answered "danger" | 0% | 86.8% |
+| Legitimate messages answered "danger" | — | 0 of 69 |
+| Held-out legitimate messages not "safe" | — | 1 of 25 |
 
 ## Measuring accuracy
 

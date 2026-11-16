@@ -7,6 +7,7 @@ import { __setRedisForTests } from './api/_lib/redis.js';
 import { infrastructureAnalysis, __setDnsForTests, __setRdapFetchForTests } from './api/_lib/infrastructure.js';
 import { BRANDS, TRUSTED_SUFFIXES, OTHER_KNOWN_DOMAINS, SHORTENERS, SUSPICIOUS_TLDS } from './api/_data/known-domains.js';
 import psl from 'psl';
+import { ENTITIES, MESSAGE_FLAG_KEYS } from './mobile/messageAnalysis.js';
 
 let pass = 0, fail = 0;
 function check(name, cond, extra) {
@@ -1548,6 +1549,100 @@ async function run() {
       res = await ask(link);
       check(`usable address still checked normally: ${link} -> ${want}`, res._json.status === want, res._json);
     }
+  }
+
+  // --- 71. Message context: a claimed body vs where the link leads ---
+  {
+    const chainFetch = (map, opts = {}) => async (url, o) => {
+      if (o.redirect === 'manual') {
+        if (opts.timeout) throw Object.assign(new Error('timeout'), { code: 'EHOPTIMEOUT' });
+        const to = map[url];
+        return to ? { status: 302, headers: { get: (hd) => (hd === 'location' ? to : null) } } : { status: 200, headers: { get: () => null } };
+      }
+      if (opts.webRiskDown) throw new Error('down');
+      if (opts.webRiskDanger) return { ok: true, json: async () => ({ threat: { threatTypes: ['SOCIAL_ENGINEERING'] } }) };
+      return { ok: true, json: async () => ({}) };
+    };
+    const run = async (body, map = {}, opts) => { global.fetch = chainFetch(map, opts); const res = mockRes(); await handler({ method: 'POST', body: { lang: 'he', ...body } }, res); return res; };
+    const hap = { claimedEntities: ['bank-hapoalim'] };
+
+    let r = (await run({ link: 'https://secure-check-session.com/a', ...hap }))._json;
+    check('claimed body + unknown site -> danger', r.status === 'danger' && r.entityMismatch === 'bank-hapoalim', r);
+    check('mismatch -> details say impersonation', r.details.includes('מתחזה') && r.details.includes('מתיימרת'), r);
+    check('mismatch -> structured reasons present, without the message sentence', Array.isArray(r.reasons) && !r.reasons.some((x) => x.includes('מתיימרת')), r);
+    r = (await run({ link: 'https://secure-check-session.com/a', ...hap }, {}, { webRiskDown: true }))._json;
+    check('mismatch decides even with Web Risk down', r.status === 'danger', r);
+    r = (await run({ link: 'https://secure-check-session.com/a', ...hap }, {}, { webRiskDanger: true }))._json;
+    check('Web Risk danger still answered as Web Risk danger', r.status === 'danger' && r.details.includes('Google Web Risk') && !r.entityMismatch, r);
+
+    r = (await run({ link: 'https://login.bankhapoalim.co.il/', ...hap }))._json;
+    check('claimed body + its own site -> safe', r.status === 'safe' && !r.entityMismatch, r);
+    r = (await run({ link: 'https://bit.ly/x', ...hap }, { 'https://bit.ly/x': 'https://www.bankhapoalim.co.il/' }))._json;
+    check('claimed body + shortener to its own site -> safe', r.status === 'safe', r);
+    r = (await run({ link: 'https://www.bitpay.co.il/app/x', ...hap }))._json;
+    check('Hapoalim claim + Bit (its app) -> safe', r.status === 'safe', r);
+    r = (await run({ link: 'https://www.gov.il/he/service/x', claimedEntities: ['tax-authority'], messageFlags: ['refund'] }))._json;
+    check('government body + gov.il -> safe', r.status === 'safe', r);
+    r = (await run({ link: 'https://www.bitpay.co.il/x', claimedEntities: ['bit', 'bank-leumi'] }))._json;
+    check('two claimed bodies: either one\'s site is fine', r.status === 'safe', r);
+
+    r = (await run({ link: 'https://bit.ly/x', ...hap }, {}, { timeout: true }))._json;
+    check('claimed body + unreachable shortener -> uncertain, never danger', r.status === 'uncertain', r);
+    r = (await run({ link: 'https://www.ynet.co.il/a', ...hap }))._json;
+    check('claimed body + someone else\'s well-known site -> uncertain', r.status === 'uncertain' && r.entityMismatch === 'bank-hapoalim', r);
+    r = (await run({ link: 'https://docs.google.com/forms/d/e/1/viewform', ...hap }))._json;
+    check('claimed body + a public form on a big platform -> danger', r.status === 'danger', r);
+    r = (await run({ link: 'https://www.mizrahi-catering.co.il/', ...hap }))._json;
+    check('claim voids the .il exemption: unknown .il site -> danger', r.status === 'danger', r);
+
+    // Message wording alone: raises, never decides.
+    r = (await run({ link: 'https://shipment-info.com/pay', messageFlags: ['parcelHeld'] }))._json;
+    check('strong wording alone on a clean unknown site -> uncertain', r.status === 'uncertain' && !r.entityMismatch, r);
+    r = (await run({ link: 'https://shipment-info.com/pay', messageFlags: ['urgency'] }))._json;
+    check('urgency alone -> still safe', r.status === 'safe', r);
+    r = (await run({ link: 'https://www.israelpost.co.il/', messageFlags: ['parcelHeld', 'otpRequest', 'prize'] }))._json;
+    check('wording on a known official site -> safe', r.status === 'safe', r);
+    r = (await run({ link: 'https://www.small-shop.co.il/', messageFlags: ['parcelHeld'] }))._json;
+    check('wording voids the .il exemption -> uncertain', r.status === 'uncertain', r);
+    r = (await run({ link: 'https://shipment-info.com/pay', messageFlags: ['parcelHeld', 'otpRequest', 'prize', 'refund', 'debtOrFine'] }))._json;
+    check('many wording flags still never danger', r.status === 'uncertain', r);
+
+    // Input validation: only known ids / keys are used, nothing echoed.
+    r = (await run({ link: 'https://secure-check-session.com/a', claimedEntities: ['<script>', 'not-a-body', 42, null, { x: 1 }], messageFlags: ['evil', 7, 'accountThreat\n'] }))._json;
+    check('unknown ids and flags are ignored', r.status === 'safe' && !r.entityMismatch, r);
+    check('nothing from the request is echoed', !JSON.stringify(r).includes('script') && !JSON.stringify(r).includes('evil'), r);
+    r = (await run({ link: 'https://secure-check-session.com/a', claimedEntities: 'bank-hapoalim' }))._json;
+    check('claimedEntities must be an array', r.status === 'safe', r);
+    r = (await run({ link: 'https://secure-check-session.com/a', claimedEntity: 'bank-hapoalim' }))._json;
+    check('single claimedEntity string also accepted', r.status === 'danger', r);
+    r = (await run({ link: 'https://secure-check-session.com/a', claimedEntities: Array(1000).fill('x').concat(['bank-hapoalim']) }))._json;
+    check('a huge list is cut to the first known ids', r.status === 'danger' || r.status === 'safe', r);
+
+    for (const lang of ['he', 'en', 'ru', 'fr', 'ar']) {
+      r = (await run({ link: 'https://secure-check-session.com/a', ...hap, lang }))._json;
+      check(`mismatch text present (${lang})`, r.status === 'danger' && r.details.length > 40, r);
+    }
+    const mm = await Promise.all(['he', 'en', 'ru', 'fr', 'ar'].map(async (lang) => (await run({ link: 'https://secure-check-session.com/a', ...hap, lang }))._json.details));
+    check('mismatch text differs per language', new Set(mm).size === 5, mm);
+
+    // Privacy: the identifiers are never stored.
+    const fakeRedis = makeFakeRedis();
+    __setRedisForTests(fakeRedis);
+    await run({ link: 'https://secure-check-session.com/a', ...hap, messageFlags: ['accountThreat'] });
+    const stored = [...fakeRedis._counters.keys(), ...fakeRedis._counters.values(), ...[...fakeRedis._sets.values()].flatMap((x) => [...x])].map(String);
+    check('message identifiers never stored', !stored.some((v) => v.includes('hapoalim') || v.includes('accountThreat') || v.includes('secure-check')), stored);
+    __setRedisForTests(null);
+  }
+
+  // --- 72. The app's entity list and flags match the server's ---
+  {
+    const serverIds = new Set(BRANDS.map((b) => b.id));
+    const missing = ENTITIES.map((e) => e.id).filter((id) => !serverIds.has(id));
+    check('every app entity id exists on the server', missing.length === 0, missing);
+    const noSites = ENTITIES.map((e) => BRANDS.find((b) => b.id === e.id)).filter((b) => b && ![...b.domains, ...(b.claimDomains || []), ...(b.official ? [b.official] : [])].length);
+    check('every claimable body has at least one site of its own', noSites.length === 0, noSites.map((b) => b.id));
+    const serverFlags = ['accountThreat', 'paymentDetails', 'otpRequest', 'parcelHeld', 'refund', 'debtOrFine', 'prize', 'urgency'];
+    check('app flag keys == server flag keys', MESSAGE_FLAG_KEYS.slice().sort().join() === serverFlags.slice().sort().join(), MESSAGE_FLAG_KEYS);
   }
 
   console.log('\n' + pass + ' passed, ' + fail + ' failed');

@@ -35,6 +35,7 @@ import * as Clipboard from 'expo-clipboard';
 import * as Localization from 'expo-localization';
 import { LANGUAGES, STRINGS, isRTL, getDeviceDefaultLanguage } from './translations';
 import { extractUrls } from './extractUrls';
+import { analyzeMessage, entityName } from './messageAnalysis';
 import { rowDirection, fixedRowDirection, applyDocumentDirection } from './direction';
 import { getTermsBody, TERMS_UPDATED_DATE } from './terms';
 import { statusIconXml, statusLogoXml, STATUS_LOGO_ASPECT } from './statusIcons';
@@ -298,11 +299,62 @@ function NextSteps({ status, t, rtl }) {
   );
 }
 
-function ResultCard({ status, url, details, t, rtl, onReset }) {
+// One message-level sentence per scam pattern the app found in the text
+// (flag key -> translation key).
+const FLAG_TEXT_KEYS = {
+  accountThreat: 'flagAccountThreat',
+  paymentDetails: 'flagPaymentDetails',
+  otpRequest: 'flagOtpRequest',
+  parcelHeld: 'flagParcelHeld',
+  refund: 'flagRefund',
+  debtOrFine: 'flagDebtOrFine',
+  prize: 'flagPrize',
+  urgency: 'flagUrgency',
+};
+
+// "Why", one plain sentence per finding: first what the message itself
+// gives away (impersonation, scam wording -- found on the device), then
+// what the server found in the link. Text, not colour, carries it.
+function WhyList({ check, message, t, rtl, lang }) {
+  const textAlign = rtl ? 'right' : 'left';
+  const messageItems = [];
+  if (check && check.entityMismatch) {
+    const name = entityName(check.entityMismatch, lang);
+    if (name) messageItems.push(t.entityMismatch(name));
+  }
+  for (const f of (message && message.messageFlags) || []) {
+    if (FLAG_TEXT_KEYS[f]) messageItems.push(t[FLAG_TEXT_KEYS[f]]);
+  }
+  const linkItems = check && Array.isArray(check.reasons) ? check.reasons.filter(Boolean) : [];
+  if (!messageItems.length && !linkItems.length) return null;
+  const section = (title, items, key) =>
+    items.length ? (
+      <View key={key} style={styles.whySection}>
+        <Text style={[styles.whyTitle, { textAlign }]} accessibilityRole="header">{title}</Text>
+        {items.map((text, i) => (
+          <View key={i} style={[styles.whyRow, { flexDirection: rowDirection(rtl) }]}>
+            <Text style={styles.whyBullet} importantForAccessibility="no" accessibilityElementsHidden>•</Text>
+            <Text style={[styles.whyText, { textAlign }]}>{text}</Text>
+          </View>
+        ))}
+      </View>
+    ) : null;
+  return (
+    <View style={styles.whyBox}>
+      {section(t.messageWhyTitle, messageItems, 'm')}
+      {section(messageItems.length ? t.linkWhyTitle : t.whyTitle, linkItems, 'l')}
+    </View>
+  );
+}
+
+function ResultCard({ status, url, details, check, message, lang, t, rtl, onReset }) {
   const palette = paletteFor(status);
   const title = statusA11yLabel(status, t);
-  const subtitle =
-    details || (status === 'safe' ? t.safeSubtitle(ltrIsolate(hostnameOf(url))) : status === 'danger' ? t.dangerSubtitle : t.unknownSubtitle);
+  // With a structured answer the reasons go in the list below, and the
+  // subtitle is the short, plain line for the verdict.
+  const structured = !!check && Array.isArray(check.reasons);
+  const fallbackSubtitle = status === 'safe' ? t.safeSubtitle(ltrIsolate(hostnameOf(url))) : status === 'danger' ? t.dangerSubtitle : t.unknownSubtitle;
+  const subtitle = structured && status !== 'safe' ? fallbackSubtitle : (details || fallbackSubtitle);
 
   return (
     <View style={[styles.resultCard, { borderColor: palette.border }]}>
@@ -316,6 +368,7 @@ function ResultCard({ status, url, details, t, rtl, onReset }) {
       </View>
       <Text style={styles.resultTitle} accessibilityLiveRegion="polite">{title}</Text>
       <Text style={styles.resultSubtitle} accessibilityLiveRegion="polite">{subtitle}</Text>
+      {status !== 'safe' && <WhyList check={check} message={message} t={t} rtl={rtl} lang={lang} />}
       <NextSteps status={status} t={t} rtl={rtl} />
       <TouchableOpacity
         style={styles.resultBtnOutline}
@@ -399,7 +452,7 @@ function ErrorCard({ check, t, rtl, onRetry, onCancel }) {
   );
 }
 
-function MultiResultCard({ checks, overallStatus, t, rtl, onReset, onRetry }) {
+function MultiResultCard({ checks, overallStatus, message, lang, t, rtl, onReset, onRetry }) {
   const palette = paletteFor(overallStatus === 'loading' ? 'unknown' : overallStatus);
   const caption =
     overallStatus === 'danger' ? t.multiDanger
@@ -431,9 +484,11 @@ function MultiResultCard({ checks, overallStatus, t, rtl, onReset, onRetry }) {
               <Text style={[styles.linkRowUrl, { textAlign: rtl ? 'right' : 'left' }]} numberOfLines={1}>
                 {c.url}
               </Text>
-              {(c.status === 'danger' || c.status === 'unknown') && !!c.details && (
-                <Text style={[styles.linkRowDetails, { textAlign: rtl ? 'right' : 'left' }]} numberOfLines={2}>
-                  {c.details}
+              {(c.status === 'danger' || c.status === 'unknown') && !!(c.entityMismatch || c.details) && (
+                <Text style={[styles.linkRowDetails, { textAlign: rtl ? 'right' : 'left' }]} numberOfLines={3}>
+                  {c.entityMismatch && entityName(c.entityMismatch, lang)
+                    ? t.entityMismatch(entityName(c.entityMismatch, lang))
+                    : Array.isArray(c.reasons) && c.reasons.length ? c.reasons.join(' · ') : c.details}
                 </Text>
               )}
               {c.status === 'error' && (
@@ -445,6 +500,9 @@ function MultiResultCard({ checks, overallStatus, t, rtl, onReset, onRetry }) {
           </View>
         ))}
       </View>
+      {overallStatus !== 'loading' && overallStatus !== 'safe' && message && message.messageFlags.length > 0 && (
+        <WhyList check={null} message={message} t={t} rtl={rtl} lang={lang} />
+      )}
       {overallStatus !== 'loading' && <NextSteps status={overallStatus} t={t} rtl={rtl} />}
       {hasUnchecked && overallStatus !== 'loading' && <RetryButton t={t} rtl={rtl} onRetry={onRetry} />}
       <TouchableOpacity
@@ -492,6 +550,11 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
   const [checks, setChecks] = useState([]);
   const [overallStatus, setOverallStatus] = useState('idle'); // idle | loading | safe | danger | unknown | error
   const requestSeqRef = useRef(0);
+  // What analyzeMessage() found in the last pasted/shared text, and the
+  // links-only string the input shows afterwards: re-checking that string
+  // ("check again", retry) reuses the analysis instead of losing it.
+  const [messageInfo, setMessageInfo] = useState(null);
+  const lastAnalysisRef = useRef({ shown: null, analysis: null });
 
   // Finds every link in the pasted text and checks them one after another
   // (not in parallel) against the backend. The result escalates to
@@ -501,7 +564,7 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
   // One backend call. Anything other than a well-formed 2xx answer —
   // no network, a timeout, 429, 5xx — is an 'error' (not checked), never a
   // verdict.
-  const checkOne = useCallback(async (url) => {
+  const checkOne = useCallback(async (url, analysis) => {
     const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
     const timer = controller ? setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS) : null;
     let response;
@@ -512,7 +575,13 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
           'Content-Type': 'application/json',
           ...(APP_SECRET ? { 'x-app-secret': APP_SECRET } : {}),
         },
-        body: JSON.stringify({ link: url, lang }),
+        // Only identifiers derived on the device, never the message text.
+        body: JSON.stringify({
+          link: url,
+          lang,
+          ...(analysis && analysis.claimedEntities.length ? { claimedEntities: analysis.claimedEntities } : {}),
+          ...(analysis && analysis.messageFlags.length ? { messageFlags: analysis.messageFlags } : {}),
+        }),
         ...(controller ? { signal: controller.signal } : {}),
       });
     } catch (err) {
@@ -530,7 +599,12 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
       }
       if (!response.ok || !data) return { status: 'error', errorKind: 'server', details: '' };
       const s = ['safe', 'danger', 'unknown'].includes(data.status) ? data.status : 'unknown';
-      return { status: s, details: data.details || '' };
+      return {
+        status: s,
+        details: data.details || '',
+        reasons: Array.isArray(data.reasons) ? data.reasons.filter((x) => typeof x === 'string') : null,
+        entityMismatch: typeof data.entityMismatch === 'string' ? data.entityMismatch : null,
+      };
     } finally {
       if (timer) clearTimeout(timer);
     }
@@ -541,7 +615,16 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
     if (!urls.length) return;
     const seq = ++requestSeqRef.current;
 
-    setLink(urls.length === 1 ? urls[0] : urls.join(', '));
+    // Read the message itself here, on the device (see messageAnalysis.js).
+    const previous = lastAnalysisRef.current;
+    const analysis = previous.shown !== null && rawText === previous.shown && previous.analysis
+      ? previous.analysis
+      : analyzeMessage(rawText);
+    const shown = urls.length === 1 ? urls[0] : urls.join(', ');
+    lastAnalysisRef.current = { shown, analysis };
+    setMessageInfo(analysis);
+
+    setLink(shown);
     setChecks(urls.map((url) => ({ url, status: 'pending', details: '' })));
     setOverallStatus('loading');
 
@@ -552,7 +635,7 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
 
       setChecks((prev) => prev.map((c, idx) => (idx === i ? { ...c, status: 'loading' } : c)));
 
-      const result = await checkOne(urls[i]);
+      const result = await checkOne(urls[i], analysis);
 
       if (seq !== requestSeqRef.current) return;
 
@@ -601,6 +684,8 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
     setLink('');
     setChecks([]);
     setOverallStatus('idle');
+    setMessageInfo(null);
+    lastAnalysisRef.current = { shown: null, analysis: null };
   }, []);
 
   const handleSelectLanguage = useCallback((code) => {
@@ -669,17 +754,22 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
               <LinkLogoIcon size={18} color={theme.inputIcon} />
             </View>
             <TextInput
-              style={[styles.input, { textAlign: rtl ? 'right' : 'left' }]}
+              style={[
+                styles.input,
+                // A link reads left-to-right; a pasted Hebrew/Arabic message
+                // must read right-to-left.
+                { textAlign: rtl ? 'right' : 'left', writingDirection: /[\u0590-\u05FF\u0600-\u06FF]/.test(link) ? 'rtl' : 'ltr' },
+              ]}
               value={link}
               onChangeText={setLink}
-              onSubmitEditing={() => runCheck(link)}
               placeholder={t.placeholder}
               placeholderTextColor="#6B7088"
               autoCapitalize="none"
               autoCorrect={false}
-              keyboardType="url"
+              multiline
               editable={!isBusy}
               accessibilityLabel={t.linkInputA11y}
+              accessibilityHint={t.messagePrivacyNote}
             />
             {!!link && (
               <TouchableOpacity
@@ -715,6 +805,8 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
             </TouchableOpacity>
           )}
 
+          {isIdle && <Text style={[styles.privacyNote, { color: theme.taglineColor }]}>{t.messagePrivacyNote}</Text>}
+
           {isBusy && <Text style={styles.checkingHint}>{t.checkingHint}</Text>}
 
           {showSingleResult && (
@@ -722,6 +814,9 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
               status={overallStatus}
               url={checks[0].url}
               details={checks[0].details}
+              check={checks[0]}
+              message={messageInfo}
+              lang={lang}
               t={t}
               rtl={rtl}
               onReset={handleClear}
@@ -736,6 +831,8 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
             <MultiResultCard
               checks={checks}
               overallStatus={overallStatus}
+              message={messageInfo}
+              lang={lang}
               t={t}
               rtl={rtl}
               onReset={handleClear}
@@ -1071,7 +1168,14 @@ const styles = StyleSheet.create({
   },
   inputIcon: { flexShrink: 0 },
   // The value is a URL: always laid out left-to-right, aligned by language.
-  input: { flex: 1, fontSize: 15, color: COLORS.text, writingDirection: 'ltr' },
+  input: { flex: 1, fontSize: 15, color: COLORS.text, writingDirection: 'ltr', maxHeight: 120, paddingVertical: 14 },
+  privacyNote: { width: '100%', maxWidth: 420, marginTop: 8, fontSize: 13, lineHeight: 18, textAlign: 'center' },
+  whyBox: { width: '100%', marginTop: 14, borderRadius: 14, backgroundColor: COLORS.neutralBg, paddingVertical: 12, paddingHorizontal: 14 },
+  whySection: { marginBottom: 4 },
+  whyTitle: { fontSize: 15, fontWeight: '700', color: COLORS.text, marginBottom: 6 },
+  whyRow: { alignItems: 'flex-start', gap: 8, marginBottom: 6 },
+  whyBullet: { fontSize: 15, lineHeight: 22, color: COLORS.textSecondary },
+  whyText: { flex: 1, fontSize: 15, lineHeight: 22, color: COLORS.text },
   clearBtn: {
     width: 32, height: 32, borderRadius: 16,
     backgroundColor: 'rgba(20,20,40,0.06)', alignItems: 'center', justifyContent: 'center',

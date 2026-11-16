@@ -4,5 +4,11 @@
   "maxFalsePositiveRateHoldout": 0.02,
   "maxLegitMarkedDanger": 0,
   "minRecall": 0.92,
-  "maxHardRuleMisses": 0
+  "maxHardRuleMisses": 0,
+  "messages": {
+    "maxLegitRed": 0,
+    "maxLegitNotSafe": 1,
+    "minScamCaught": 0.95,
+    "minClaimedBodyRed": 0.95
+  }
 }

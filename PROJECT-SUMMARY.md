@@ -77,7 +77,8 @@ Desktop\link-checker-vercel\              <- הבקאנד + שורש
     ├── icons.js, statusIcons.js           <- אייקוני SVG (react-native-svg)
     ├── translations.js                    <- כל טקסטי הממשק, 5 שפות (המקור האמיתי)
     ├── extractUrls.js, test-extract-urls.mjs  <- מזהה קישורים בטקסט, 15 טסטים
-    ├── test-translations.mjs             <- בדיקות תרגומים, 1025 טסטים
+    ├── test-translations.mjs             <- בדיקות תרגומים, 1213 טסטים
+    ├── messageAnalysis.js, test-message-analysis.mjs  <- ניתוח ההודעה על המכשיר, 172 טסטים
     ├── app.json, eas.json, index.js, package.json
     ├── .env                                <- EXPO_PUBLIC_API_URL, EXPO_PUBLIC_APP_SECRET
     ├── assets\                             <- אייקוני האפליקציה הנייטיבית
@@ -210,6 +211,25 @@ Risk ושל בדיקות שנשארו בלי תשובה ממנו.
 - **בקשות ההפניה נשלחות עם User-Agent של דפדפן נייד**, כדי לראות את
   מה שהמשתמש היה רואה.
 
+### 2א. ניתוח תוכן ההודעה (נובמבר 2026)
+- **על המכשיר בלבד**: `mobile/messageAnalysis.js` קורא את ההודעה ומחזיר
+  רק מזהים: `claimedEntities` (עד 3 גופים שההודעה מדברת בשמם) ו-
+  `messageFlags` (סוגי ניסוח הונאה). הטקסט לא יוצא מהמכשיר.
+- **כלל קשיח רביעי (החלטת הבעלים)**: ההודעה מתיימרת להיות מגוף מוכר,
+  והקישור מוביל לאתר לא מוכר שאינו של אותו גוף → "מסוכן". אם היעד הוא
+  אתר מוכר של מישהו אחר (ynet, YouTube) או שלא ניתן לברר לאן הקישור
+  מוביל → "לא ודאי". טופס או מסמך ציבורי בפלטפורמה גדולה (Google Forms
+  וכו׳) נחשב כאתר לא מוכר.
+- **"מתיימרת"** = דפוס הונאה בנוסח, או שם הגוף בפתיחת ההודעה + בקשה
+  לפעול. אמצעי תשלום ומותגים גלובליים (ביט, פייבוקס, אמזון) רק עם דפוס
+  הונאה, כי חנויות וחברים מזכירים אותם כל הזמן.
+- **ניסוח ההודעה לבד** מעלה ציון (עד 2) ומבטל את פטור ה-.il, אבל לא
+  מכריע.
+- **רשימת הדומיינים של כל גוף** (`api/_data/known-domains.js`, כולל
+  `claimDomains`) היא עכשיו קריטית: דומיין אמיתי שחסר שם יגרום ל"מסוכן"
+  שגוי על הודעה אמיתית מאותו גוף.
+- מדידה: `node eval/messages.mjs`.
+
 ### 3. DNS / Infrastructure layer (`api/_lib/infrastructure.js` — החדש ביותר)
 שכבה נפרדת ומודגשת בכוונה מה-heuristic, כי היא מבוססת על **תשתית
 בפועל** של הדומיין, לא על מבנה ה-URL:
@@ -270,7 +290,8 @@ Risk ושל בדיקות שנשארו בלי תשובה ממנו.
   SSRF guard בזמן חיבור בכל hop, תקציב הזמן של שרשרת ההפניות,
   ו-race pattern (מוודא ש-"danger" חוזר מהר בלי להמתין ל-infra תקוע).
 - **extractUrls**: 15/15 (`node test-extract-urls.mjs` מתוך `mobile\`).
-- **תרגומים**: 1025/1025 (`node test-translations.mjs` מתוך `mobile\`).
+- **תרגומים**: 1213/1213 (`node test-translations.mjs` מתוך `mobile\`).
+- **ניתוח הודעה**: 172/172 (`node test-message-analysis.mjs` מתוך `mobile\`).
 - **גרסת SDK**: Expo 54. תלויות עיקריות ב-mobile:
   `react-native-svg`, `expo-linear-gradient`, `expo-share-intent`,
   `@react-native-async-storage/async-storage`, `expo-updates`.

@@ -5,9 +5,9 @@
     "type": "module",
     "scripts": {
         "test": "node test.mjs",
-        "test:mobile": "cd mobile && node test-extract-urls.mjs && node test-translations.mjs",
+        "test:mobile": "cd mobile && node test-extract-urls.mjs && node test-translations.mjs && node test-message-analysis.mjs",
         "smoke": "node scripts/smoke.mjs",
-        "eval": "node eval/run.mjs"
+        "eval": "node eval/run.mjs && node eval/messages.mjs"
     },
     "engines": {
         "node": "24.x"

@@ -228,6 +228,21 @@ pasting is wired to the clipboard instead (`expo-clipboard`), which
 works reliably as a real native API. The user copies the link first
 (long-press → Copy in Messages/Mail), then taps the button.
 
+## API request fields
+
+`POST /api/check-link` with JSON:
+
+| Field | Required | Meaning |
+|---|---|---|
+| `link` | yes | The link to check (max 8192 characters). |
+| `lang` | no | `he` (default), `en`, `ru`, `fr`, `ar`. |
+| `claimedEntities` | no | Up to 3 body ids (from `api/_data/known-domains.js`) the message claims to come from. Unknown ids are ignored. |
+| `messageFlags` | no | Scam-wording keys found in the message: `accountThreat`, `paymentDetails`, `otpRequest`, `parcelHeld`, `refund`, `debtOrFine`, `prize`, `urgency`. Unknown keys are ignored. |
+
+The answer adds `reasons` (one sentence per finding about the link),
+`webRisk` (`ok` / `unavailable`) and, when the link isn't the claimed
+body's, `entityMismatch` (that body's id).
+
 ## Environment variables reference
 
 | Variable | Where | Purpose |

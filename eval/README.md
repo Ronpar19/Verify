@@ -41,6 +41,16 @@ production, listed links are caught on top of that.
 - Legitimate domains were written from knowledge, not verified against
   a registry. A wrong entry there would overstate false positives.
 
+## Messages (`eval/messages.mjs`, part of `npm run eval`)
+
+`data/messages.mjs` holds whole messages. Each runs through the app's
+own on-device analysis and link extraction, then every link goes through
+the handler with only the derived identifiers. Reported: scam messages
+caught / answered "danger" (with and without the message analysis), and
+legitimate messages answered "danger" or not "safe". The `holdout` batch
+was written after tuning. The gate (`thresholds.json` → `messages`)
+allows **no** legitimate message to be answered "danger".
+
 ## The gate
 
 `thresholds.json` holds the limits CI enforces. A change that raises
