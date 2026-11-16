@@ -58,6 +58,11 @@ const RATE_LIMIT_MAX = 20;
 const RATE_LIMIT_WINDOW = '1 h';
 
 const SUPPORTED_LANGS = ['he', 'en', 'ru', 'fr', 'ar'];
+
+// Longer links are not followed or analysed: no real link a person is
+// sent comes close, and it bounds the work an attacker can make one
+// request cost. (Answered "uncertain", never "safe".)
+const MAX_LINK_LENGTH = 8192;
 const DEFAULT_LANG = 'he';
 
 // ---------- CORS origin allowlist ----------
@@ -132,6 +137,8 @@ const MESSAGES = {
       redirectIncomplete: 'לא הצלחנו לעקוב אחרי שרשרת ההפניות עד היעד הסופי, ולכן היעד האמיתי לא נבדק',
       scamScenario: 'שם הדומיין מורכב ממילים שאופייניות להודעות הונאה (משלוח, החזר, תשלום) ולא משם של חברה או גוף מוכר',
       originalLinkPrefix: 'בכתובת שקיבלתם, לפני שהיא מפנה הלאה: ',
+      invalidHost: 'זה לא נראה כמו כתובת אתר תקינה, ולכן לא ניתן לבדוק אותה',
+      tooLong: 'הכתובת ארוכה באופן חריג מכדי לבדוק אותה במלואה',
       comboBonus: 'השילוב של כמה סימנים חשודים יחד תואם דפוס הונאה מוכר',
       noneFound: 'לא זוהו סימנים חשודים בולטים במבנה הקישור',
       parseFailed: 'לא הצלחנו לנתח את מבנה הכתובת',
@@ -174,6 +181,8 @@ const MESSAGES = {
       redirectIncomplete: 'We could not follow the redirect chain all the way to its final destination, so the real destination was not checked',
       scamScenario: "The domain name is made of words typical of scam messages (delivery, refund, payment) rather than the name of a real company or organisation",
       originalLinkPrefix: 'In the address you received, before it forwards elsewhere: ',
+      invalidHost: 'This does not look like a valid web address, so it could not be checked',
+      tooLong: 'The address is unusually long, too long to check in full',
       comboBonus: 'The combination of several suspicious signals together matches a known phishing pattern',
       noneFound: "No notable suspicious signs were detected in the link's structure",
       parseFailed: 'We could not parse the structure of this address',
@@ -216,6 +225,8 @@ const MESSAGES = {
       redirectIncomplete: 'Не удалось пройти всю цепочку перенаправлений до конечного адреса, поэтому настоящий адрес назначения не проверен',
       scamScenario: 'Имя домена составлено из слов, типичных для мошеннических сообщений (доставка, возврат, оплата), а не из названия реальной компании или организации',
       originalLinkPrefix: 'В адресе, который вы получили, до перенаправления: ',
+      invalidHost: 'Это не похоже на правильный адрес сайта, поэтому его нельзя проверить',
+      tooLong: 'Адрес необычно длинный — слишком длинный, чтобы проверить его полностью',
       comboBonus: 'Сочетание нескольких подозрительных признаков вместе соответствует известной схеме фишинга',
       noneFound: 'Явных подозрительных признаков в структуре ссылки не обнаружено',
       parseFailed: 'Не удалось разобрать структуру этого адреса',
@@ -258,6 +269,8 @@ const MESSAGES = {
       redirectIncomplete: "Nous n'avons pas pu suivre la chaîne de redirections jusqu'à sa destination finale, la vraie destination n'a donc pas été vérifiée",
       scamScenario: "Le nom de domaine est composé de mots typiques des messages frauduleux (livraison, remboursement, paiement) et non du nom d'une vraie entreprise ou d'un organisme",
       originalLinkPrefix: "Dans l'adresse que vous avez reçue, avant sa redirection : ",
+      invalidHost: "Cela ne ressemble pas à une adresse web valide, elle n'a donc pas pu être vérifiée",
+      tooLong: "L'adresse est anormalement longue, trop pour être vérifiée en entier",
       comboBonus: 'La combinaison de plusieurs signes suspects correspond à un schéma de phishing connu',
       noneFound: "Aucun signe suspect notable n'a été détecté dans la structure du lien",
       parseFailed: "Nous n'avons pas pu analyser la structure de cette adresse",
@@ -300,6 +313,8 @@ const MESSAGES = {
       redirectIncomplete: 'تعذّر تتبّع سلسلة إعادة التوجيه حتى الوجهة النهائية، لذلك لم يتم فحص الوجهة الحقيقية',
       scamScenario: 'اسم النطاق مكوَّن من كلمات شائعة في رسائل الاحتيال (توصيل، استرداد، دفع) وليس من اسم شركة أو جهة حقيقية',
       originalLinkPrefix: 'في العنوان الذي وصلك، قبل إعادة التوجيه: ',
+      invalidHost: 'لا يبدو هذا عنوان موقع صالحًا، لذلك تعذّر فحصه',
+      tooLong: 'العنوان طويل بشكل غير معتاد، أطول من أن يُفحص بالكامل',
       comboBonus: 'يتطابق مزيج عدة علامات مشبوهة معًا مع نمط تصيّد احتيالي معروف',
       noneFound: 'لم يتم رصد علامات مشبوهة واضحة في بنية الرابط',
       parseFailed: 'تعذّر تحليل بنية هذا العنوان',
@@ -379,7 +394,8 @@ async function checkRateLimit(req) {
     const { success, reset } = await limiter.limit(ip);
     return { limited: !success, reset };
   } catch (err) {
-    console.error('check-link error (ratelimit):', err);
+    // Error type only: an Upstash error can echo the command, whose key is the client IP.
+    console.error('check-link error (ratelimit):', (err && err.name) || 'error');
     return { limited: false };
   }
 }
@@ -414,7 +430,7 @@ async function sendVerdict(req, res, status, details, webRisk) {
   try {
     await recordCheck(getRedis(), { status, ip: clientIp(req), webRisk });
   } catch (err) {
-    console.error('check-link error (stats):', (err && err.message) || 'unknown');
+    console.error('check-link error (stats):', (err && err.name) || 'error');
   }
   const body = { status, details };
   if (webRisk) body.webRisk = webRisk.unavailable ? 'unavailable' : 'ok';
@@ -465,9 +481,20 @@ export default async function handler(req, res) {
     return res.status(400).json({ status: 'unknown', details: 'Missing "link" in request body' });
   }
 
+  // Not a usable web address at all (unparseable, no host, a host no
+  // browser could reach): say so plainly. Never "safe" -- and not the
+  // "private network" wording either, which used to be shown here.
+  const trimmed = link.trim();
+  if (trimmed.length > MAX_LINK_LENGTH) {
+    return sendVerdict(req, res, 'uncertain', m.uncertainPrefix + m.heuristicReasons.tooLong);
+  }
+  if (!isUsableWebAddress(normalizeUrl(trimmed))) {
+    return sendVerdict(req, res, 'uncertain', m.heuristicReasons.invalidHost);
+  }
+
   let finalUrl, chain;
   try {
-    const normalized = normalizeUrl(link.trim());
+    const normalized = normalizeUrl(trimmed);
     chain = await resolveFinalUrl(normalized);
     finalUrl = chain.url;
   } catch (err) {
@@ -552,7 +579,8 @@ export default async function handler(req, res) {
   // same reasoning, and the same pattern, as webRiskPromise's own
   // `.catch()` just above.
   const infraPromise = infrastructureAnalysis(finalUrl, lang).catch((err) => {
-    console.error('check-link error (infra):', err);
+    // Error type only: a DNS/RDAP error message can carry the hostname being checked.
+    console.error('check-link error (infra):', (err && (err.code || err.name)) || 'error');
     return { score: 0, reasons: [], available: false };
   });
 
@@ -713,6 +741,22 @@ function carryEarlierHopSignals(heuristic, visited, lang) {
     }
   }
   return out;
+}
+
+// A hostname a browser could actually open: an IP literal, "localhost",
+// or labels of letters/digits/hyphens (punycode included). The WHATWG
+// parser accepts far more ("ht!tp" from "ht!tp://..."), which used to slip
+// through as a clean-looking link.
+const HOST_LABEL_RE = /^(?!-)[a-z0-9-]{1,63}(?<!-)$/;
+function isUsableWebAddress(urlString) {
+  let u;
+  try { u = new URL(urlString); } catch (e) { return false; }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+  const host = u.hostname.toLowerCase().replace(/\.+$/, '');
+  if (!host) return false;
+  if (isIpLiteral(host) || isPrivateHost(host)) return true;
+  const labels = host.split('.');
+  return labels.length >= 2 && labels.every((l) => HOST_LABEL_RE.test(l)) && /^([a-z]{2,63}|xn--[a-z0-9-]{1,59})$/.test(labels[labels.length - 1]);
 }
 
 function normalizeUrl(raw) {

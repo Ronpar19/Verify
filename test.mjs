@@ -1528,6 +1528,28 @@ async function run() {
     check('hop sends no cookies, referrer or client hints', !!seen && !seen.cookie && !seen.referer && !Object.keys(seen).some((k) => k.startsWith('sec-') || k.startsWith('x-')), seen);
   }
 
+  // --- 70. Input that is not a usable web address, and oversized input ---
+  {
+    global.fetch = noRedirectFetch(async () => ({ ok: true, json: async () => ({}) }));
+    const ask = async (link, lang) => { const res = mockRes(); await handler({ method: 'POST', body: { link, lang } }, res); return res; };
+    for (const link of ['ht!tp://%%%', 'not a link at all', '%%%', 'javascript:alert(1)', 'http:///', 'https://exa mple.com/', 'https://-bad-.com/', 'https://example.123/']) {
+      const res = await ask(link);
+      check(`not a web address -> 200 uncertain: ${link}`, res._status === 200 && res._json.status === 'uncertain', res._json);
+      check(`not a web address -> no "private network" wording: ${link}`, !res._json.details.includes('פרטית'), res._json);
+    }
+    for (const lang of ['he', 'en', 'ru', 'fr', 'ar']) {
+      const res = await ask('ht!tp://%%%', lang);
+      check(`invalid-address text present (${lang})`, res._json.status === 'uncertain' && res._json.details.length > 20, res._json);
+    }
+    let res = await ask('https://example.com/' + 'a'.repeat(9000));
+    check('over-long link -> 200 uncertain, nothing fetched', res._status === 200 && res._json.status === 'uncertain', res._json);
+    // Still accepted: ordinary hosts, IDN, IP literals (hard rules), localhost.
+    for (const [link, want] of [['https://www.google.com', 'safe'], ['www.leumi.co.il', 'safe'], ['https://www.ישראל.co.il/', 'safe'], ['http://45.33.12.9/', 'danger'], ['http://127.0.0.1/', 'danger'], ['http://localhost/', 'danger']]) {
+      res = await ask(link);
+      check(`usable address still checked normally: ${link} -> ${want}`, res._json.status === want, res._json);
+    }
+  }
+
   console.log('\n' + pass + ' passed, ' + fail + ' failed');
   process.exit(fail ? 1 : 0);
 }
