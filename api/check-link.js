@@ -389,14 +389,25 @@ function claimedSites(brands) {
 //               confirmed (redirects cut short, stopped at a shortener)
 function entityMismatch(brands, chain) {
   if (!brands.length) return null;
-  const sites = claimedSites(brands);
+  // Judged against the PRIMARY claimed body only (the one the message
+  // opens with): naming a second body must not make the first one's
+  // mismatch disappear ("Bank Leumi: ... also verify your Google account"
+  // with a link on google.com).
+  const sites = claimedSites([brands[0]]);
   const owned = (h) => !!h && sites.some((d) => h === d || h.endsWith('.' + d));
+  const onHost = (h, list) => !!h && list.some((x) => h === x || h.endsWith('.' + x));
   const startHost = safeHostname(chain.visited && chain.visited[0]);
   const finalHost = safeHostname(chain.url);
-  if (owned(startHost) || owned(finalHost)) return null;
+  // A public form or shared document is never "the body's own site", even
+  // on the body's own platform (a Microsoft Form, a Google Doc).
+  if (onHost(finalHost, USER_CONTENT_HOSTS)) return 'danger';
+  if (owned(finalHost)) return null;
+  // Starting on the body's own domain only clears it when it also ends
+  // somewhere known: an open redirect from the body's site to an unknown
+  // one is the forgery pattern too.
+  if (owned(startHost) && finalHost && isKnownSafeHost(finalHost)) return null;
   if (!chain.complete || !finalHost) return 'uncertain';
-  if (SHORTENERS.some((x) => finalHost === x || finalHost.endsWith('.' + x))) return 'uncertain';
-  if (USER_CONTENT_HOSTS.some((x) => finalHost === x || finalHost.endsWith('.' + x))) return 'danger';
+  if (onHost(finalHost, SHORTENERS)) return 'uncertain';
   if (isKnownSafeHost(finalHost)) return 'uncertain';
   return 'danger';
 }
@@ -871,7 +882,8 @@ function normalizeUrl(raw) {
 }
 
 function safeHostname(urlString) {
-  try { return new URL(urlString).hostname; } catch (e) { return null; }
+  // (A trailing root dot names the same host: "leumi.co.il." is leumi.co.il.)
+  try { return new URL(urlString).hostname.replace(/\.+$/, '') || null; } catch (e) { return null; }
 }
 
 // SSRF guard, layer 1 (literal hosts): refuse to let the server fetch

@@ -75,8 +75,10 @@ async function main() {
   const count = (list, f) => list.filter(f).length;
   const s = {
     legitRed: count(legit, (r) => r.withMsg.status === 'danger'),
-    legitNotSafe: count(legit.filter((r) => r.category !== 'from-the-body-unreachable'), (r) => r.withMsg.status !== 'safe'),
-    legitReachable: legit.filter((r) => r.category !== 'from-the-body-unreachable').length,
+    legitNotSafe: count(legit.filter((r) => r.category !== 'from-the-body-unreachable' && r.category !== 'review-found'), (r) => r.withMsg.status !== 'safe'),
+    reviewNotSafe: count(legit.filter((r) => r.category === 'review-found'), (r) => r.withMsg.status !== 'safe'),
+    reviewTotal: legit.filter((r) => r.category === 'review-found').length,
+    legitReachable: legit.filter((r) => r.category !== 'from-the-body-unreachable' && r.category !== 'review-found').length,
     scamCaught: count(scam, (r) => r.withMsg.status !== 'safe'),
     scamRed: count(scam, (r) => r.withMsg.status === 'danger'),
     scamCaughtLinkOnly: count(scam, (r) => r.linkOnly.status !== 'safe'),
@@ -95,6 +97,7 @@ async function main() {
   console.log(`  ...of those claiming a body           ${''.padStart(9)}   ${s.claimedBodyRed}/${s.claimedBodyTotal}`);
   console.log(`  Legitimate messages marked DANGER     ${''.padStart(9)}   ${s.legitRed}/${legit.length}`);
   console.log(`  Legitimate (reachable) not "safe"     ${''.padStart(9)}   ${s.legitNotSafe}/${s.legitReachable}`);
+  console.log(`  Review-found tricky legit: not "safe"  ${''.padStart(9)}   ${s.reviewNotSafe}/${s.reviewTotal} (scam-like wording -> "be careful", by design)`);
   console.log(`  ...held-out batch: danger / not safe  ${''.padStart(9)}   ${s.holdoutRed}/${s.holdoutTotal} / ${s.holdoutNotSafe}/${s.holdoutTotal}`);
 
   if (args.has('--misses')) {

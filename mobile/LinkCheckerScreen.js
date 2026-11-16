@@ -610,14 +610,14 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
     }
   }, [lang]);
 
-  const runCheck = useCallback(async (rawText) => {
+  const runCheck = useCallback(async (rawText, { reuseAnalysis = false } = {}) => {
     const urls = extractUrls(rawText);
     if (!urls.length) return;
     const seq = ++requestSeqRef.current;
 
     // Read the message itself here, on the device (see messageAnalysis.js).
     const previous = lastAnalysisRef.current;
-    const analysis = previous.shown !== null && rawText === previous.shown && previous.analysis
+    const analysis = reuseAnalysis && previous.shown !== null && rawText === previous.shown && previous.analysis
       ? previous.analysis
       : analyzeMessage(rawText);
     const shown = urls.length === 1 ? urls[0] : urls.join(', ');
@@ -677,7 +677,13 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
     if (text && text.trim()) runCheck(text);
   }, [runCheck]);
 
-  const handleCheckPress = useCallback(() => runCheck(link), [runCheck, link]);
+  // "Check again" / retry on the links the input now shows: keep what was
+  // read from the original message. Any new paste, share or edit starts over.
+  const handleCheckPress = useCallback(() => runCheck(link, { reuseAnalysis: true }), [runCheck, link]);
+  const handleChangeText = useCallback((value) => {
+    setLink(value);
+    if (value !== lastAnalysisRef.current.shown) lastAnalysisRef.current = { shown: null, analysis: null };
+  }, []);
 
   const handleClear = useCallback(() => {
     requestSeqRef.current++; // invalidate any in-flight check
@@ -761,7 +767,7 @@ export default function LinkCheckerScreen({ sharedText, onSharedTextHandled }) {
                 { textAlign: rtl ? 'right' : 'left', writingDirection: /[\u0590-\u05FF\u0600-\u06FF]/.test(link) ? 'rtl' : 'ltr' },
               ]}
               value={link}
-              onChangeText={setLink}
+              onChangeText={handleChangeText}
               placeholder={t.placeholder}
               placeholderTextColor="#6B7088"
               autoCapitalize="none"

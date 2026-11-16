@@ -1595,6 +1595,22 @@ async function run() {
     r = (await run({ link: 'https://www.mizrahi-catering.co.il/', ...hap }))._json;
     check('claim voids the .il exemption: unknown .il site -> danger', r.status === 'danger', r);
 
+    // Security-review fixes.
+    r = (await run({ link: 'https://sites.google.com/view/leumi-secure', claimedEntities: ['bank-leumi', 'google'] }))._json;
+    check('a second claimed body does not clear the first one\'s mismatch', r.status === 'danger', r);
+    r = (await run({ link: 'https://forms.office.com/r/x', claimedEntities: ['microsoft'] }))._json;
+    check('a public form is never the body\'s own site, even on its platform', r.status === 'danger', r);
+    r = (await run({ link: 'https://www.leumi.co.il/go', claimedEntities: ['bank-leumi'] }, { 'https://www.leumi.co.il/go': 'https://leumi-verify-session.com/login' }))._json;
+    check('open redirect from the body\'s site to an unknown one -> danger', r.status === 'danger', r);
+    r = (await run({ link: 'https://www.leumi.co.il/go', claimedEntities: ['bank-leumi'] }, { 'https://www.leumi.co.il/go': 'https://www.youtube.com/watch?v=1' }))._json;
+    check('the body\'s site forwarding to a known site -> not danger', r.status !== 'danger', r);
+    r = (await run({ link: 'https://www.leumi.co.il./', claimedEntities: ['bank-leumi'] }))._json;
+    check('trailing dot on the body\'s own domain -> not danger', r.status !== 'danger' && !r.entityMismatch, r);
+    for (const [link, id] of [['https://aka.ms/x', 'microsoft'], ['https://apple.co/x', 'apple'], ['https://a.co/d/x', 'amazon'], ['https://mydhl.express.dhl/il', 'dhl'], ['https://www.dhl.de/x', 'dhl']]) {
+      r = (await run({ link, claimedEntities: [id] }))._json;
+      check(`official domain ${link} is ${id}'s own`, r.status !== 'danger' && !r.entityMismatch, r);
+    }
+
     // Message wording alone: raises, never decides.
     r = (await run({ link: 'https://shipment-info.com/pay', messageFlags: ['parcelHeld'] }))._json;
     check('strong wording alone on a clean unknown site -> uncertain', r.status === 'uncertain' && !r.entityMismatch, r);

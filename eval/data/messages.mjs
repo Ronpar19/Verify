@@ -70,6 +70,30 @@ export const LEGIT_MESSAGES = {
     { text: 'תזכורת: תור לרופא שיניים ביום ב. לאישור הגעה לחצו https://www.dr-cohen-dental.co.il/confirm' },
     { text: 'קוד האימות שלך הוא 482193. אין להעביר קוד זה לאף אחד.' },
   ],
+  // Found by the independent security review: each of these used to come
+  // back "danger". Kept as permanent regression cases.
+  'review-found': [
+    { text: 'קיבלת מתנה! שובר BUYME בסך 200 ₪ למימוש בשופרסל, סופר-פארם ורמי לוי https://www.buyme.co.il/giftcard/123' },
+    { text: 'הורים יקרים, ההגרלה לטיול תתקיים מחר. תשלום דרך אפליקציית ביט או כאן https://www.school-trip.co.il/pay' },
+    { text: 'Electra Power: קבלו זיכוי בסך 100 ₪ במעבר מחברת החשמל https://www.electra-power.co.il/join' },
+    { text: 'כתבה: ביטוח לאומי – מי זכאי להחזר מס השנה? https://www.bizportal.co.il/article/1' },
+    { text: 'Статья: Битуах Леуми — кому положен возврат налога https://www.vesty.co.il/article/1' },
+    { text: 'החבילה שלך מעליאקספרס מעוכבת במכס. למעקב: https://global.cainiao.com/detail.htm?mailNoList=LP001' },
+    { text: 'مكابي حيفا: غرامة على النادي https://www.panet.co.il/article/1' },
+    { text: 'HMRC: your National Insurance contributions are unpaid https://www.gov.uk/pay-national-insurance' },
+    { text: 'ועד הבית: אסיפה כללית ביום ראשון. יתרת חוב לדירה 4 – פרטים בטופס https://forms.gle/AbC123' },
+    { text: 'תשלום לטיול השנתי: הזינו את הקוד שקיבלתם בפלאפון באתר https://www.school-pay.co.il/' },
+    { text: 'מבצע בזק! הגרלה על אייפון לכל המזמינים היום https://www.myshop.co.il/sale' },
+    { text: 'ועד הפועלים: זכיתם בהגרלה לנופש! הפרטים כאן https://www.vaad-ovdim.co.il/nofesh' },
+    { text: 'תקנון בית הספר: התנהגות בדרך ארץ חובה, איחור חוזר יגרור קנס https://www.school-rules.org.il/' },
+    { text: 'החברה מתייחסת לאיחור בתשלום כאל חוב פתוח, פרטים https://www.landlord-info.co.il/terms' },
+    { text: 'Доктор Мизрахи: у вас неоплаченный счёт за приём https://www.dr-mizrahi-clinic.co.il/pay' },
+    { text: 'Administration fiscale : vous avez droit à un remboursement https://www.impots.gouv.fr/' },
+    { text: 'Налоговая служба: вам положен возврат налога https://www.nalog.gov.ru/' },
+    { text: 'Ministry of Transport: unpaid fine notice, see https://www.gov.uk/pay-dvla-fine' },
+    { text: 'DHL: your parcel is held at customs, pay the duty at https://mydhl.express.dhl/il/en/help.html' },
+    { text: 'Microsoft: your account will be suspended, read more https://aka.ms/accountsecurity' },
+  ],
   // Written AFTER the rules were tuned and never used to tune them: the
   // honest false-alarm estimate. Do not special-case these.
   'holdout': [
@@ -136,6 +160,11 @@ export const SCAM_MESSAGES = {
     { text: 'Bituach Leumi : vous avez droit à un remboursement. Cliquez sur le lien https://refund-claims-center.com/fr' },
     // A body's name, and the link is a shortener to a scam site.
     { text: 'דואר ישראל: החבילה שלך מעוכבת, לתשלום דמי שחרור https://bit.ly/3scm', chain: { 'https://bit.ly/3scm': ['https://parcel-release-fee.com/x'] } },
+    // Naming a second body must not clear the first one's mismatch.
+    { text: 'בנק לאומי: חשבונך ייחסם. אמתו כאן, ואמתו גם את חשבון גוגל שלכם https://sites.google.com/view/leumi-secure' },
+    { text: 'Microsoft: your account will be suspended. Verify: https://forms.office.com/r/AbC' },
+    // An open redirect on the body's own site, to an unknown one.
+    { text: 'בנק לאומי: חשבונך ייחסם. לאימות https://www.leumi.co.il/go', chain: { 'https://www.leumi.co.il/go': ['https://leumi-verify-session.com/login'] } },
     // A known site that isn't the body's (a form on Google).
     { text: 'בנק לאומי: נדרש עדכון פרטים עד סוף היום. מלאו את הטופס https://docs.google.com/forms/d/e/1FAIpQ/viewform' },
   ],

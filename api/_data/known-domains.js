@@ -74,7 +74,7 @@ export const BRANDS = [
 
   // ---- Post & shipping ----
   { id: 'israel-post', noTypo: ['mypost'], domains: ['israelpost.co.il'], strong: ['israelpost', 'doarisrael', 'mypost'], words: ['doar', 'post'] },
-  { id: 'dhl', domains: ['dhl.com', 'dhl.co.il'], strong: [], words: ['dhl'] },
+  { id: 'dhl', domains: ['dhl.com', 'dhl.co.il', 'dhl.de', 'express.dhl'], strong: [], words: ['dhl'] },
   { id: 'ups', domains: ['ups.com'], strong: [], words: ['ups'] },
   { id: 'fedex', domains: ['fedex.com'], strong: ['fedex'], words: [] },
   { id: 'usps', domains: ['usps.com'], strong: [], words: ['usps'] },
@@ -116,9 +116,9 @@ export const BRANDS = [
   // ---- Global ----
   { id: 'google', multiTld: true, noTypo: ['youtu', 'android'], domains: ['google.com', 'google.co.il', 'youtube.com', 'youtu.be', 'gmail.com', 'goo.gl', 'g.co', 'forms.gle', 'android.com'], strong: ['google', 'youtube', 'gmail'], words: [] },
   { id: 'meta', noTypo: ['meta', 'threads', 'messenger'], domains: ['facebook.com', 'fb.com', 'fb.me', 'messenger.com', 'instagram.com', 'whatsapp.com', 'wa.me', 'meta.com', 'threads.net'], strong: ['facebook', 'instagram', 'whatsapp'], words: ['messenger'] },
-  { id: 'apple', multiTld: true, domains: ['apple.com', 'icloud.com'], strong: ['appleid', 'icloud'], words: ['apple', 'itunes'] },
-  { id: 'microsoft', multiTld: true, noTypo: ['windows', 'office', 'live', 'bing', 'outlook', 'skype', 'xbox'], domains: ['microsoft.com', 'microsoftonline.com', 'live.com', 'office.com', 'outlook.com', 'microsoft365.com', 'windows.com', 'bing.com', 'msn.com', 'skype.com', 'xbox.com', 'linkedin.com', 'lnkd.in'], strong: ['microsoft', 'office365', 'linkedin'], words: ['outlook'] },
-  { id: 'amazon', multiTld: true, noTypo: ['primevideo'], domains: ['amazon.com', 'amazon.co.uk', 'amazon.de', 'amazon.fr', 'amazon.it', 'amazon.es', 'amazon.ca', 'amazon.ae', 'amazon.in', 'amazon.co.jp', 'amzn.to', 'amzn.com', 'primevideo.com'], strong: [], words: ['amazon'] },
+  { id: 'apple', multiTld: true, domains: ['apple.com', 'icloud.com', 'apple.co'], strong: ['appleid', 'icloud'], words: ['apple', 'itunes'] },
+  { id: 'microsoft', multiTld: true, noTypo: ['windows', 'office', 'live', 'bing', 'outlook', 'skype', 'xbox'], domains: ['microsoft.com', 'microsoftonline.com', 'live.com', 'office.com', 'outlook.com', 'microsoft365.com', 'windows.com', 'bing.com', 'msn.com', 'skype.com', 'xbox.com', 'linkedin.com', 'lnkd.in', 'aka.ms'], strong: ['microsoft', 'office365', 'linkedin'], words: ['outlook'] },
+  { id: 'amazon', multiTld: true, noTypo: ['primevideo'], domains: ['amazon.com', 'amazon.co.uk', 'amazon.de', 'amazon.fr', 'amazon.it', 'amazon.es', 'amazon.ca', 'amazon.ae', 'amazon.in', 'amazon.co.jp', 'amzn.to', 'amzn.com', 'a.co', 'primevideo.com'], strong: [], words: ['amazon'] },
   { id: 'aliexpress', noTypo: ['alibaba'], domains: ['aliexpress.com', 'aliexpress.us', 'alibaba.com'], strong: ['aliexpress'], words: ['alibaba'] },
   { id: 'ebay', multiTld: true, domains: ['ebay.com', 'ebay.co.uk', 'ebay.de'], strong: [], words: ['ebay'] },
   { id: 'temu', domains: ['temu.com'], strong: [], words: ['temu'] },

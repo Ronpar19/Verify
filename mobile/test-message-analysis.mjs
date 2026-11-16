@@ -47,6 +47,36 @@ for (const text of [
   check(`no claim: ${text.slice(0, 40)}`, claims(text).length === 0, analyzeMessage(text));
 }
 
+// 2b. Found by the security review: a body mentioned mid-message, an
+// everyday word, or a foreign body's generic name is never a claim.
+for (const text of [
+  'קיבלת מתנה! שובר BUYME בסך 200 ₪ למימוש בשופרסל, סופר-פארם ורמי לוי',
+  'הורים יקרים, ההגרלה לטיול תתקיים מחר. תשלום דרך אפליקציית ביט או כאן',
+  'Electra Power: קבלו זיכוי בסך 100 ₪ במעבר מחברת החשמל',
+  'כתבה: ביטוח לאומי – מי זכאי להחזר מס השנה?',
+  'ועד הבית: אסיפה כללית ביום ראשון. יתרת חוב לדירה 4',
+  'תשלום לטיול השנתי: הזינו את הקוד שקיבלתם בפלאפון',
+  'מבצע בזק! הגרלה על אייפון',
+  'ועד הפועלים: זכיתם בהגרלה לנופש!',
+  'תקנון: התנהגות בדרך ארץ חובה, איחור יגרור קנס',
+  'מתייחסים לאיחור כאל חוב פתוח',
+  'Доктор Мизрахи: у вас неоплаченный счёт',
+  'Administration fiscale : vous avez droit à un remboursement',
+  'Налоговая служба: вам положен возврат налога',
+  'Ministry of Transport: unpaid fine notice',
+  'HMRC: your National Insurance contributions are unpaid',
+  'مكابي حيفا: غرامة على النادي',
+]) {
+  check(`review case, no claim: ${text.slice(0, 40)}`, claims(text).length === 0, analyzeMessage(text));
+}
+check('bare everyday word as the opening word still claims: "בזק:" + scam pattern', claims('בזק: החשבון שלך ייחסם תוך 24 שעות')[0] === 'bezeq', analyzeMessage('בזק: החשבון שלך ייחסם תוך 24 שעות'));
+check('French elision handled', claims("L'administration fiscale israélienne : remboursement d'impôt à recevoir")[0] === 'tax-authority', analyzeMessage("L'administration fiscale israélienne : remboursement d'impôt à recevoir"));
+{
+  const t0 = Date.now();
+  for (let i = 0; i < 20; i++) { analyzeMessage('ab.1 '.repeat(1000)); analyzeMessage('a.'.repeat(2500)); }
+  check('link stripping is linear on adversarial input', Date.now() - t0 < 400, Date.now() - t0);
+}
+
 // 3. National Insurance is never read as Bank Leumi; Leumit is not Leumi.
 check('ביטוח לאומי -> bituach-leumi only', JSON.stringify(claims('ביטוח לאומי: מגיע לך החזר כספי')) === '["bituach-leumi"]', claims('ביטוח לאומי: מגיע לך החזר כספי'));
 check('המוסד לביטוח לאומי -> bituach-leumi only', JSON.stringify(claims('המוסד לביטוח לאומי: החשבון שלך יוקפא')) === '["bituach-leumi"]');

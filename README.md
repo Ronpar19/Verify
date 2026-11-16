@@ -57,9 +57,9 @@ project is interesting* below for why.)
   (IPv4 and IPv6), under a 10-second budget for the whole chain
 - Per-IP rate limiting, shared-secret request auth, and privacy-
   conscious usage stats, all backed by Upstash Redis
-- 1908 automated tests across four suites (508 for backend detection
+- 1937 automated tests across four suites (518 for backend detection
   logic + API behavior, 15 for URL extraction, 1213 for translations,
-  172 for on-device message analysis),
+  191 for on-device message analysis),
   zero live network calls required to run any of them
 
 ## Why this project is interesting (the engineering decisions)
@@ -157,18 +157,25 @@ is **"danger"**, with the reason spelled out: *"The message is written as
 if it came from Bank Hapoalim, but the link does not lead to Bank
 Hapoalim's website."* Scam wording alone only raises the score. To keep
 that rule from firing on ordinary messages, a body only counts as
-"claimed" when the message speaks in its name — a scam pattern, or the
-body's name opening the message with a request to act; payment apps and
-global brands ("pay with Bit", "I ordered on Amazon") need a scam pattern.
+"claimed" when its name **opens** the message (only greeting/sender words
+like "Dear customer" may come first) and the message carries a scam
+pattern or asks you to act; payment apps and global brands ("pay with
+Bit", "I ordered on Amazon") need a scam pattern, and names that are
+everyday words (כללית, בזק, פלאפון) only count as the very first word.
 
 `npm run eval` also runs a message-level set (`eval/messages.mjs`):
 
 | | Link only | With message analysis |
 |---|---|---|
-| Scam messages caught | 5.3% | 100% |
-| Scam messages answered "danger" | 0% | 86.8% |
-| Legitimate messages answered "danger" | — | 0 of 69 |
+| Scam messages caught | 7.3% | 100% |
+| Scam messages answered "danger" | 0% | 87.8% |
+| Legitimate messages answered "danger" | — | 0 of 89 |
 | Held-out legitimate messages not "safe" | — | 1 of 25 |
+
+The 89 include 20 tricky legitimate messages an independent security
+review found (a gift voucher "redeemable at Shufersal", a school message
+about a raffle, a UK "National Insurance" notice): none is "danger", and
+17 of them get "be careful" because their wording reads like a scam.
 
 ## Measuring accuracy
 

@@ -64,7 +64,7 @@ Desktop\link-checker-vercel\              <- הבקאנד + שורש
 │       ├── redis.js                      <- לקוח Upstash Redis משותף
 │       ├── stats.js                      <- ספירת שימוש פרטית (בלי לשמור תוכן קישורים)
 │       └── infrastructure.js             <- שכבת DNS/RDAP (נוספה בשיחה אחרונה)
-├── test.mjs                               <- 474 טסטים לבקאנד (heuristic + infra + SSRF + API)
+├── test.mjs                               <- 518 טסטים לבקאנד (heuristic + infra + SSRF + API)
 ├── package.json, README.md, vercel.json
 ├── DEPLOYMENT.md                          <- מדריך פריסה מלא צעד-אחר-צעד
 ├── .env.example, .gitignore
@@ -78,7 +78,7 @@ Desktop\link-checker-vercel\              <- הבקאנד + שורש
     ├── translations.js                    <- כל טקסטי הממשק, 5 שפות (המקור האמיתי)
     ├── extractUrls.js, test-extract-urls.mjs  <- מזהה קישורים בטקסט, 15 טסטים
     ├── test-translations.mjs             <- בדיקות תרגומים, 1213 טסטים
-    ├── messageAnalysis.js, test-message-analysis.mjs  <- ניתוח ההודעה על המכשיר, 172 טסטים
+    ├── messageAnalysis.js, test-message-analysis.mjs  <- ניתוח ההודעה על המכשיר, 191 טסטים
     ├── app.json, eas.json, index.js, package.json
     ├── .env                                <- EXPO_PUBLIC_API_URL, EXPO_PUBLIC_APP_SECRET
     ├── assets\                             <- אייקוני האפליקציה הנייטיבית
@@ -220,9 +220,14 @@ Risk ושל בדיקות שנשארו בלי תשובה ממנו.
   אתר מוכר של מישהו אחר (ynet, YouTube) או שלא ניתן לברר לאן הקישור
   מוביל → "לא ודאי". טופס או מסמך ציבורי בפלטפורמה גדולה (Google Forms
   וכו׳) נחשב כאתר לא מוכר.
-- **"מתיימרת"** = דפוס הונאה בנוסח, או שם הגוף בפתיחת ההודעה + בקשה
-  לפעול. אמצעי תשלום ומותגים גלובליים (ביט, פייבוקס, אמזון) רק עם דפוס
-  הונאה, כי חנויות וחברים מזכירים אותם כל הזמן.
+- **"מתיימרת"** = שם הגוף **פותח** את ההודעה (לפניו רק מילות פנייה כמו
+  "שלום", "לקוח יקר", "הודעה מ"), ובנוסף דפוס הונאה או בקשה לפעול. גוף
+  שמוזכר באמצע ההודעה אף פעם לא נחשב. אמצעי תשלום ומותגים גלובליים
+  (ביט, פייבוקס, אמזון) רק עם דפוס הונאה. מילים יומיומיות (כללית, בזק,
+  פלאפון, כאל) רק כמילה הראשונה בהודעה.
+- **בעלות** נבדקת מול הגוף הראשי בלבד (גוף שני בהודעה לא "מכשיר" קישור),
+  טופס/מסמך ציבורי (Google Forms וכו׳) לעולם אינו "האתר של הגוף", והפניה
+  מאתר הגוף לאתר לא מוכר = "מסוכן".
 - **ניסוח ההודעה לבד** מעלה ציון (עד 2) ומבטל את פטור ה-.il, אבל לא
   מכריע.
 - **רשימת הדומיינים של כל גוף** (`api/_data/known-domains.js`, כולל
@@ -285,13 +290,13 @@ Risk ושל בדיקות שנשארו בלי תשובה ממנו.
 ---
 
 ## סטטוס טסטים
-- **בקאנד**: 474/474 (`node test.mjs` מהשורש) — כולל heuristic v2,
+- **בקאנד**: 518/518 (`node test.mjs` מהשורש) — כולל heuristic v2,
   שכבת ה-infra (עם DNS/RDAP מדומים, בלי קריאות רשת אמיתיות בטסטים),
   SSRF guard בזמן חיבור בכל hop, תקציב הזמן של שרשרת ההפניות,
   ו-race pattern (מוודא ש-"danger" חוזר מהר בלי להמתין ל-infra תקוע).
 - **extractUrls**: 15/15 (`node test-extract-urls.mjs` מתוך `mobile\`).
 - **תרגומים**: 1213/1213 (`node test-translations.mjs` מתוך `mobile\`).
-- **ניתוח הודעה**: 172/172 (`node test-message-analysis.mjs` מתוך `mobile\`).
+- **ניתוח הודעה**: 191/191 (`node test-message-analysis.mjs` מתוך `mobile\`).
 - **גרסת SDK**: Expo 54. תלויות עיקריות ב-mobile:
   `react-native-svg`, `expo-linear-gradient`, `expo-share-intent`,
   `@react-native-async-storage/async-storage`, `expo-updates`.
