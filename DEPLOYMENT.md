@@ -92,15 +92,58 @@ vercel --prod
 Note the production URL, e.g. `https://your-project.vercel.app`.
 Your endpoint is `https://your-project.vercel.app/api/check-link`.
 
-**5. Test it**
+**5. Test it — the post-deploy smoke test**
+
+Run this after **every** production deploy. It is the only check that
+talks to the real Google Web Risk; the offline suites mock it.
 ```bash
-curl -X POST https://your-project.vercel.app/api/check-link \
-  -H "Content-Type: application/json" \
-  -d '{"link":"https://www.google.com"}'
+SMOKE_API_URL=https://your-project.vercel.app/api/check-link \
+SMOKE_APP_SECRET=<the APP_SECRET value, if you set one> \
+npm run smoke
 ```
-Expect `{"status":"safe","details":"..."}`. Google publishes a safe
-test URL for the malware list to see the "danger" path too:
-`http://testsafebrowsing.appspot.com/s/malware.html`.
+It sends Google's official, harmless test URL
+(`http://testsafebrowsing.appspot.com/s/malware.html`) and fails unless
+the answer is `danger`, carries `"webRisk": "ok"`, and has no "Basic
+check only" text. Then it sends `https://www.google.com/` and expects
+`safe`. It uses 2 Web Risk lookups and 2 requests of the rate limit.
+
+**Checking by hand** (same thing, with curl):
+```bash
+curl -s -X POST https://your-project.vercel.app/api/check-link \
+  -H "Content-Type: application/json" -H "x-app-secret: <APP_SECRET>" \
+  -d '{"link":"http://testsafebrowsing.appspot.com/s/malware.html","lang":"en"}'
+```
+| You get | Meaning |
+|---|---|
+| `"status":"danger"`, `"webRisk":"ok"` | Working. |
+| `"webRisk":"unavailable"`, text starts with "(Basic check only" | Web Risk is not answering — see the table below. |
+| HTTP 401 | Wrong or missing `x-app-secret`. |
+| HTTP 429 | Rate limited; wait an hour or test from another network. |
+
+**If Web Risk is unavailable.** While it is, the app never answers
+"safe": a link with nothing suspicious comes back "uncertain", because
+the structural check alone cannot vouch for a link. To find the cause,
+open Vercel → the backend project → **Logs**, search for
+`check-link error (webrisk)`, and read the line:
+
+| Log line | Fix |
+|---|---|
+| `GOOGLE_API_KEY is not set in the environment` | Vercel → Settings → Environment Variables: add it for **Production** (not only Preview), then redeploy — env changes only apply to new deployments. |
+| `HTTP 400 INVALID_ARGUMENT API_KEY_INVALID` | The value is not a valid key (typo, extra space, a deleted key). |
+| `HTTP 403 PERMISSION_DENIED SERVICE_DISABLED` | Google Cloud → APIs & Services → enable **Web Risk API** on the key's project. |
+| `HTTP 403 PERMISSION_DENIED BILLING_DISABLED` | Link a billing account to that project (required even inside the free tier). |
+| `HTTP 403 PERMISSION_DENIED API_KEY_SERVICE_BLOCKED` | The key's **API restrictions** don't include Web Risk API. |
+| `HTTP 403 PERMISSION_DENIED API_KEY_HTTP_REFERRER_BLOCKED` / `API_KEY_IP_ADDRESS_BLOCKED` | The key's **Application restrictions** must be **None** — Vercel calls from changing server IPs with no referrer. |
+| `HTTP 429 RESOURCE_EXHAUSTED` | Quota used up; see `/api/stats` below. |
+| `TimeoutError` / `AbortError` / `TypeError` | Google didn't answer within 6 s (transient network problem). |
+
+The log line never contains the API key or the link that was checked.
+
+**Watching the quota.** `GET /api/stats?secret=<STATS_SECRET>` now
+includes a `webRisk` block for the current month: `calls` (lookups sent
+to Google, against `freeMonthlyCalls`) and `checksWithoutWebRisk` (how
+many checks got no usable Web Risk answer). The second number should
+stay at 0; if it grows, run the smoke test.
 
 **Local development:** `vercel dev` reads `.env` (copy `.env.example`
 → `.env` and fill in your key) so you can test against `localhost`
@@ -113,8 +156,8 @@ budget, and error fallbacks) against mocked network/DNS/RDAP, so it
 runs offline with no API key or network needed. Two smaller suites
 cover the app:
 ```bash
-node test.mjs                                    # backend, from repo root
-cd mobile && node test-extract-urls.mjs && node test-translations.mjs
+npm test                 # backend (node test.mjs), from repo root
+npm run test:mobile      # URL extraction + translations
 ```
 Worth re-running all of them before every deploy.
 

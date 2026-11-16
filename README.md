@@ -57,7 +57,7 @@ project is interesting* below for why.)
   (IPv4 and IPv6), under a 10-second budget for the whole chain
 - Per-IP rate limiting, shared-secret request auth, and privacy-
   conscious usage stats, all backed by Upstash Redis
-- 1389 automated tests across three suites (349 for backend detection
+- 1409 automated tests across three suites (369 for backend detection
   logic + API behavior, 15 for URL extraction, 1025 for translations),
   zero live network calls required to run any of them
 
@@ -207,7 +207,12 @@ Backend API (for reference, not meant for direct browsing):
    infrastructure signal could change that outcome anyway.
    Otherwise, waits for the infrastructure result and combines it
    with the structural heuristic's score into one verdict.
-6. Any failure anywhere in that chain degrades to a cautious
+6. If Web Risk itself can't be reached (missing key, quota, outage),
+   the answer is never "safe": the other two layers can still raise
+   "danger", but on their own they top out at "uncertain". The response
+   carries `"webRisk": "ok" | "unavailable"`, which the post-deploy
+   smoke test (`npm run smoke`) checks against Google's test URL.
+   Any other failure in that chain degrades to a cautious
    `"unknown"`/`"uncertain"` result with a `200` — the app never
    crashes or hangs, and DNS/RDAP unavailability (which is expected
    and silent for some TLDs — see `infrastructure.js`) is never

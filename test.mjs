@@ -67,6 +67,11 @@ function makeFakeRedis() {
       counters.set(key, v);
       return v;
     },
+    async incrby(key, n) {
+      const v = (counters.get(key) || 0) + n;
+      counters.set(key, v);
+      return v;
+    },
     async get(key) {
       return counters.has(key) ? counters.get(key) : null;
     },
@@ -133,12 +138,15 @@ async function run() {
     check('fallback note present', res._json.details.includes('בדיקה בסיסית'), res._json);
   }
 
-  // --- 5. Web Risk unavailable + heuristic clean -> safe ---
+  // --- 5. Web Risk unavailable + heuristic clean -> uncertain, never "safe":
+  // the structural check alone can't vouch for a link (owner's decision) ---
   {
     global.fetch = noRedirectFetch(async () => { throw new Error('simulated network failure'); });
     const res = mockRes();
     await handler({ method: 'POST', body: { link: 'https://www.google.com' } }, res);
-    check('web risk down, heuristic clean -> safe', res._json.status === 'safe', res._json);
+    check('web risk down, heuristic clean -> uncertain (not safe)', res._json.status === 'uncertain', res._json);
+    check('web risk down -> says the Google check did not run', res._json.details.includes('בדיקה בסיסית'), res._json);
+    check('web risk down -> response says webRisk unavailable', res._json.webRisk === 'unavailable', res._json);
   }
 
   // --- 6. Missing API key entirely -> still gets a heuristic-based answer, not a bare "unknown" ---
@@ -1299,6 +1307,84 @@ async function run() {
     };
     r = await runLink('http://8.8.4.4/go');
     check('SSRF path keeps an earlier raw-IP hop -> danger', r.status === 'danger' && r.details.includes('IP ציבורית'), r);
+  }
+
+  // --- 65. Web Risk health: never "safe" without it, counted, and logged
+  // without the key or the link ---
+  {
+    const runWith = async (webRisk, link, lang) => {
+      global.fetch = noRedirectFetch(webRisk);
+      const res = mockRes();
+      await handler({ method: 'POST', body: { link, lang } }, res);
+      return res._json;
+    };
+    const clean = async () => ({ ok: true, json: async () => ({}) });
+    const refused403 = async () => ({
+      ok: false, status: 403,
+      json: async () => ({ error: { code: 403, status: 'PERMISSION_DENIED', message: 'echo https://distinctive-link.example/abc key=test-key-123', details: [{ reason: 'API_KEY_SERVICE_BLOCKED' }] } }),
+    });
+
+    let r = await runWith(clean, 'https://www.google.com');
+    check('WR ok: clean link -> safe + webRisk ok', r.status === 'safe' && r.webRisk === 'ok', r);
+
+    for (const lang of ['he', 'en', 'ru', 'fr', 'ar']) {
+      r = await runWith(refused403, 'https://www.google.com', lang);
+      check(`WR refused (${lang}): clean link -> uncertain, flagged unavailable`, r.status === 'uncertain' && r.webRisk === 'unavailable', r);
+    }
+    r = await runWith(refused403, 'https://www.leumi.co.il/');
+    check('WR refused: known .il bank -> still not safe', r.status === 'uncertain', r);
+    r = await runWith(refused403, 'http://paypal.com@evil.example.ru/');
+    check('WR refused: hard rule still -> danger', r.status === 'danger', r);
+
+    delete process.env.GOOGLE_API_KEY;
+    r = await runWith(clean, 'https://www.google.com');
+    check('no API key: clean link -> uncertain, flagged unavailable', r.status === 'uncertain' && r.webRisk === 'unavailable', r);
+    process.env.GOOGLE_API_KEY = 'test-key-123';
+
+    // The failure log names Google's reason, never the key or the link.
+    const logged = [];
+    const realError = console.error;
+    console.error = (...args) => logged.push(args.map((a) => (a && a.stack) || String(a)).join(' '));
+    try {
+      await runWith(refused403, 'https://distinctive-link.example/abc');
+      await runWith(async () => { throw new Error('fetch failed for https://webrisk.googleapis.com/v1/uris:search?key=test-key-123&uri=https://distinctive-link.example/abc'); }, 'https://distinctive-link.example/abc');
+    } finally { console.error = realError; }
+    const all = logged.join('\n');
+    check('WR failure log names the HTTP status and Google reason', all.includes('HTTP 403') && all.includes('PERMISSION_DENIED') && all.includes('API_KEY_SERVICE_BLOCKED'), logged);
+    check('WR failure log never contains the API key', !all.includes('test-key-123'), logged);
+    check('WR failure log never contains the link', !all.includes('distinctive-link'), logged);
+
+    // Counters: lookups sent (quota) and checks left without Web Risk.
+    const fakeRedis = makeFakeRedis();
+    __setRedisForTests(fakeRedis);
+    const month = new Date().toISOString().slice(0, 7);
+    await runWith(clean, 'https://www.google.com');
+    global.fetch = async (url, opts) => {
+      if (opts.redirect === 'manual') {
+        if (url.startsWith('https://short.example')) return { status: 302, headers: { get: (h) => (h === 'location' ? 'https://www.google.com/' : null) } };
+        return { status: 200, headers: { get: () => null } };
+      }
+      return { ok: true, json: async () => ({}) };
+    };
+    { const res = mockRes(); await handler({ method: 'POST', body: { link: 'https://short.example/x' } }, res); }
+    check('WR counter: one lookup per URL in the chain (1 + 2)', fakeRedis._counters.get('stats:webrisk:calls:' + month) === 3, [...fakeRedis._counters]);
+    check('WR counter: nothing unavailable yet', !fakeRedis._counters.has('stats:webrisk:unavailable:' + month), [...fakeRedis._counters]);
+    await runWith(refused403, 'https://www.google.com');
+    delete process.env.GOOGLE_API_KEY;
+    await runWith(clean, 'https://www.google.com');
+    process.env.GOOGLE_API_KEY = 'test-key-123';
+    check('WR counter: failed lookup still counts as a call; no-key does not', fakeRedis._counters.get('stats:webrisk:calls:' + month) === 4, [...fakeRedis._counters]);
+    check('WR counter: two checks without Web Risk', fakeRedis._counters.get('stats:webrisk:unavailable:' + month) === 2, [...fakeRedis._counters]);
+    const stored = [...fakeRedis._counters.keys(), ...fakeRedis._counters.values()].map(String);
+    check('WR counters hold no link content', !stored.some((v) => v.includes('google') || v.includes('short.example')), stored);
+
+    process.env.STATS_SECRET = 'top-secret';
+    const statsRes = mockRes();
+    await statsHandler({ method: 'GET', headers: {}, query: { secret: 'top-secret' } }, statsRes);
+    const wr = statsRes._json.webRisk;
+    check('stats -> webRisk block', wr && wr.month === month && wr.calls === 4 && wr.checksWithoutWebRisk === 2 && wr.freeMonthlyCalls === 100000, statsRes._json);
+    delete process.env.STATS_SECRET;
+    __setRedisForTests(null);
   }
 
   console.log('\n' + pass + ' passed, ' + fail + ' failed');

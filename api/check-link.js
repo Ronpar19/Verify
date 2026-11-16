@@ -1,7 +1,8 @@
 // api/check-link.js
 //
 // Secure serverless endpoint: POST { "link": "...", "lang": "he"|"en"|"ru"|"fr"|"ar" }
-// -> { "status": "safe" | "danger" | "unknown", "details": "..." }
+// -> { "status": "safe" | "uncertain" | "danger" | "unknown", "details": "...",
+//      "webRisk": "ok" | "unavailable" (present once Web Risk was consulted) }
 //
 // The Google API key lives ONLY in process.env.GOOGLE_API_KEY (a Vercel
 // environment variable) and is never sent to the mobile client.
@@ -432,13 +433,21 @@ function isAuthorized(req) {
 // here so the counters and the actual response never drift apart. Never
 // stores the checked link's content — only the resulting status and a
 // salted hash of the IP for same-day dedup.
-async function sendVerdict(req, res, status, details) {
+//
+// `webRisk` (optional) is what happened with Google Web Risk on this check:
+// { calls, unavailable }. It feeds two aggregate counters (quota tracking,
+// and how often Web Risk was down) and a machine-readable `webRisk` field
+// in the response ('ok' | 'unavailable'), which the post-deploy smoke test
+// reads instead of matching localized text.
+async function sendVerdict(req, res, status, details, webRisk) {
   try {
-    await recordCheck(getRedis(), { status, ip: clientIp(req) });
+    await recordCheck(getRedis(), { status, ip: clientIp(req), webRisk });
   } catch (err) {
-    console.error('check-link error (stats):', err);
+    console.error('check-link error (stats):', (err && err.message) || 'unknown');
   }
-  return res.status(200).json({ status, details });
+  const body = { status, details };
+  if (webRisk) body.webRisk = webRisk.unavailable ? 'unavailable' : 'ok';
+  return res.status(200).json(body);
 }
 
 export default async function handler(req, res) {
@@ -527,13 +536,15 @@ export default async function handler(req, res) {
       // could dodge Web Risk just by answering our datacenter's DNS with a
       // private IP. (Skipped when the answer is already "danger", to spare
       // quota; a failed call leaves the answer as it is.)
+      let blockedMeta;
       if (status !== 'danger') {
-        const blockedChainRisk = await checkWebRiskChain(err.visited || [err.attemptedUrl], lang);
-        if (blockedChainRisk && blockedChainRisk.status === 'danger') {
-          return sendVerdict(req, res, 'danger', blockedChainRisk.details);
+        const blockedChain = await checkWebRiskChain(err.visited || [err.attemptedUrl], lang);
+        blockedMeta = blockedChain.meta;
+        if (blockedChain.result && blockedChain.result.status === 'danger') {
+          return sendVerdict(req, res, 'danger', blockedChain.result.details, blockedMeta);
         }
       }
-      return sendVerdict(req, res, status, m.ssrfPrefix + reasons.join('; '));
+      return sendVerdict(req, res, status, m.ssrfPrefix + reasons.join('; '), blockedMeta);
     }
     return sendVerdict(req, res, 'unknown', m.genericError);
   }
@@ -574,13 +585,13 @@ export default async function handler(req, res) {
     return { score: 0, reasons: [], available: false };
   });
 
-  const webRiskResult = await webRiskPromise;
+  const { result: webRiskResult, meta: webRiskMeta } = await webRiskPromise;
 
   // Web Risk found a confirmed match — that's a strong, reliable signal.
   // Trust it outright; no need for a second opinion from either the
   // heuristic or the infrastructure layer.
   if (webRiskResult && webRiskResult.status === 'danger') {
-    return sendVerdict(req, res, webRiskResult.status, webRiskResult.details);
+    return sendVerdict(req, res, webRiskResult.status, webRiskResult.details, webRiskMeta);
   }
 
   // By the time we reach here, infraPromise has already been running for
@@ -620,15 +631,18 @@ export default async function handler(req, res) {
 
   if (!webRiskResult) {
     // Web Risk unavailable (bad/missing key, network error, quota) — the
-    // heuristic + infrastructure signals are all we have, so use the full
-    // combined verdict range.
-    const statusMap = { safe: 'safe', uncertain: 'uncertain', unsafe: 'danger' };
-    return sendVerdict(req, res, statusMap[combinedVerdict], m.heuristicOnlyPrefix + combinedReasons.join('; '));
+    // heuristic + infrastructure signals are all we have. They can still
+    // escalate to "danger", but they can never vouch for a link on their
+    // own: without the known-threat lookup the best answer is "uncertain",
+    // never "safe" (owner's decision -- a listed malware URL has a perfectly
+    // ordinary structure).
+    const statusMap = { safe: 'uncertain', uncertain: 'uncertain', unsafe: 'danger' };
+    return sendVerdict(req, res, statusMap[combinedVerdict], m.heuristicOnlyPrefix + combinedReasons.join('; '), webRiskMeta);
   }
 
   if (combinedVerdict === 'safe') {
     // All signals agree.
-    return sendVerdict(req, res, 'safe', webRiskResult.details + m.bothSafeSuffix);
+    return sendVerdict(req, res, 'safe', webRiskResult.details + m.bothSafeSuffix, webRiskMeta);
   }
 
   // Web Risk found nothing on its lists yet, but the heuristic caught a
@@ -644,7 +658,7 @@ export default async function handler(req, res) {
   // internal IP found only there stays a strong score contribution, never
   // an automatic "danger".
   if (heuristic.highConfidence) {
-    return sendVerdict(req, res, 'danger', m.heuristicDangerPrefix + combinedReasons.join('; '));
+    return sendVerdict(req, res, 'danger', m.heuristicDangerPrefix + combinedReasons.join('; '), webRiskMeta);
   }
 
   // Israeli (.il) sites: the local heuristic runs exactly the same as for
@@ -672,14 +686,14 @@ export default async function handler(req, res) {
     heuristic.signals.every((sig) => IL_WEAK_SIGNALS.has(sig)) &&
     infra.reasons.length === 0
   ) {
-    return sendVerdict(req, res, 'safe', webRiskResult.details);
+    return sendVerdict(req, res, 'safe', webRiskResult.details, webRiskMeta);
   }
 
   // Everything else: Web Risk found nothing on its lists, and neither the
   // URL's own structure nor its infrastructure is a smoking gun — don't
   // hand out false confidence, but don't cry "danger" on a legitimate
   // site either.
-  return sendVerdict(req, res, 'uncertain', m.uncertainPrefix + combinedReasons.join('; '));
+  return sendVerdict(req, res, 'uncertain', m.uncertainPrefix + combinedReasons.join('; '), webRiskMeta);
 }
 
 function normalizeUrl(raw) {
@@ -998,22 +1012,46 @@ function hasUserinfo(urlString) {
 // final URL alone can't vouch for an unchecked hop. With no redirect this
 // is exactly one call, as before.
 async function checkWebRiskChain(urls, lang) {
+  // `meta` is what the stats counters and the response's `webRisk` field
+  // are built from: how many lookups were actually sent (quota tracking)
+  // and whether the answer as a whole counts as "Web Risk unavailable".
   const apiKey = process.env.GOOGLE_API_KEY;
   if (!apiKey) {
-    console.error('GOOGLE_API_KEY is not set in the environment');
-    return null;
+    console.error('check-link error (webrisk): GOOGLE_API_KEY is not set in the environment');
+    return { result: null, meta: { calls: 0, unavailable: true } };
   }
   // Credentials in a URL ("user:pass@host") are the sender's, not part of
   // what's being looked up -- never forward them to Google.
   const unique = [...new Set(urls.map(stripUserinfo))];
   const results = await Promise.all(unique.map((u) => checkWebRisk(u, apiKey, lang).catch((err) => {
-    console.error('check-link error (webrisk):', err);
+    // Only our own summary of the failure: the raw error can carry the
+    // request URL, i.e. the API key and the link being checked.
+    console.error('check-link error (webrisk):', (err && err.webRiskSummary) || (err && err.name) || 'request failed');
     return null;
   })));
   const danger = results.find((r) => r && r.status === 'danger');
-  if (danger) return danger;
-  if (results.some((r) => !r)) return null;
-  return results[results.length - 1];
+  const meta = { calls: unique.length, unavailable: !danger && results.some((r) => !r) };
+  if (danger) return { result: danger, meta };
+  if (meta.unavailable) return { result: null, meta };
+  return { result: results[results.length - 1], meta };
+}
+
+// Why Web Risk refused, in Google's own machine-readable terms (HTTP
+// status, error.status such as PERMISSION_DENIED, and the ErrorInfo reason
+// such as API_KEY_INVALID / SERVICE_DISABLED / BILLING_DISABLED /
+// API_KEY_SERVICE_BLOCKED). Deliberately NOT error.message: that free text
+// can echo the request back. This one log line is what tells the owner
+// which setting to fix.
+async function webRiskFailureSummary(resp) {
+  let grpcStatus = '', reason = '';
+  try {
+    const body = await resp.json();
+    const e = body && body.error;
+    if (e && typeof e.status === 'string' && /^[A-Z_]{1,40}$/.test(e.status)) grpcStatus = e.status;
+    const info = e && Array.isArray(e.details) ? e.details.find((d) => d && typeof d.reason === 'string') : null;
+    if (info && /^[A-Z0-9_]{1,60}$/.test(info.reason)) reason = info.reason;
+  } catch (e) { /* no JSON body -- the HTTP status alone will do */ }
+  return ['HTTP ' + resp.status, grpcStatus, reason].filter(Boolean).join(' ');
 }
 
 async function checkWebRisk(url, apiKey, lang) {
@@ -1026,7 +1064,9 @@ async function checkWebRisk(url, apiKey, lang) {
   const resp = await fetchWithTimeout(endpoint.toString(), { method: 'GET' });
 
   if (!resp.ok) {
-    throw new Error('Web Risk API responded with status ' + resp.status);
+    const err = new Error('Web Risk API request was refused');
+    err.webRiskSummary = await webRiskFailureSummary(resp);
+    throw err;
   }
 
   const data = await resp.json();

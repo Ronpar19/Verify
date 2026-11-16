@@ -11,7 +11,11 @@
 // in a browser) or an `x-stats-secret` header (for scripts/curl).
 
 import { getRedis } from './_lib/redis.js';
-import { STATUSES, TOTAL_KEY, statusKey, dauKey, lastNDatesUTC } from './_lib/stats.js';
+import { STATUSES, TOTAL_KEY, statusKey, dauKey, lastNDatesUTC, monthUTC, webRiskCallsKey, webRiskUnavailableKey } from './_lib/stats.js';
+
+// Google Web Risk Lookup API free tier (calls per month), shown next to
+// the month's usage so the owner can see how close the quota is.
+const WEBRISK_FREE_MONTHLY_CALLS = 100000;
 
 const MAX_DAYS = 30;
 const DEFAULT_DAYS = 7;
@@ -43,8 +47,11 @@ export default async function handler(req, res) {
   const dates = lastNDatesUTC(days);
 
   try {
-    const [total, ...rest] = await Promise.all([
+    const month = monthUTC();
+    const [total, webRiskCalls, webRiskUnavailable, ...rest] = await Promise.all([
       redis.get(TOTAL_KEY),
+      redis.get(webRiskCallsKey(month)),
+      redis.get(webRiskUnavailableKey(month)),
       ...STATUSES.map((s) => redis.get(statusKey(s))),
       ...dates.map((d) => redis.scard(dauKey(d))),
     ]);
@@ -66,6 +73,12 @@ export default async function handler(req, res) {
       totalChecks: Number(total) || 0,
       byStatus,
       uniqueUsersByDay,
+      webRisk: {
+        month,
+        calls: Number(webRiskCalls) || 0,
+        freeMonthlyCalls: WEBRISK_FREE_MONTHLY_CALLS,
+        checksWithoutWebRisk: Number(webRiskUnavailable) || 0,
+      },
     });
   } catch (err) {
     console.error('stats error:', err);
